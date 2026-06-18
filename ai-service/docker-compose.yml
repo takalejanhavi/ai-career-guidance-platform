@@ -1,0 +1,62 @@
+version: '3.9'
+
+services:
+
+  # ── AI / ML Service ──────────────────────────────────────────────
+  ai_service:
+    build:
+      context: .
+      target: production
+    container_name: cgp_ai_service
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    environment:
+      PORT:              5050
+      FLASK_DEBUG:       "false"
+      AI_SERVICE_SECRET: ${AI_SERVICE_SECRET:-dev_secret_change_me}
+      ALLOWED_ORIGINS:   "http://localhost:5173,http://localhost:4000"
+      WORKERS:           2
+      THREADS:           4
+      TIMEOUT:           120
+    volumes:
+      # Mount artefacts directory so models survive restarts without rebuild
+      - ai_artefacts:/app/models/artefacts
+      - ai_data:/app/data
+    networks:
+      - cgp_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/healthz')"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+      start_period: 45s
+
+  # ── Training job (run once then exit) ────────────────────────────
+  trainer:
+    build:
+      context: .
+      target:  builder
+    container_name: cgp_trainer
+    profiles: ["train"]          # only runs with: docker compose --profile train up trainer
+    environment:
+      N_TRAIN_SAMPLES: 12000
+    volumes:
+      - ai_artefacts:/app/models/artefacts
+      - ai_data:/app/data
+      - .:/app                   # mount code for hot-reload in dev
+    command: >
+      sh -c "pip install -e . --quiet &&
+             python data/generate_dataset.py &&
+             python models/train.py"
+    networks:
+      - cgp_net
+
+volumes:
+  ai_artefacts:
+  ai_data:
+
+networks:
+  cgp_net:
+    external: true
+    name: cgp_net
