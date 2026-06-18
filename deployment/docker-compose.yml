@@ -1,0 +1,308 @@
+# ──────────────────────────────────────────────────────────────────
+# docker-compose.yml — Local Development Stack
+# Services: frontend, backend, ai_service, worker, mongo, redis,
+#           nginx, mailhog, minio, hardhat_node
+# ──────────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+# ── Common settings ───────────────────────────────────────────────
+x-common-env: &common-env
+  NODE_ENV: development
+  TZ: UTC
+
+x-backend-env: &backend-env
+  <<: *common-env
+  PORT: "4000"
+  MONGODB_URI: mongodb://mongo:27017/career_guidance
+  REDIS_URL: redis://redis:6379
+  FRONTEND_URL: http://localhost:5173
+  AI_SERVICE_URL: http://ai_service:5050
+  AI_SERVICE_SECRET: dev_secret
+  SMTP_HOST: mailhog
+  SMTP_PORT: "1025"
+  SMTP_USER: dev
+  SMTP_PASS: dev
+  EMAIL_FROM: dev@localhost
+  S3_ENDPOINT: http://minio:9000
+  S3_BUCKET: career-reports
+  S3_REGION: us-east-1
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
+  BLOCKCHAIN_RPC_URL: http://hardhat_node:8545
+  BLOCKCHAIN_PRIVATE_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+  BLOCKCHAIN_NETWORK: hardhat-local
+  LOG_LEVEL: debug
+  RATE_LIMIT_MAX: "1000"
+  AUTH_RATE_LIMIT_MAX: "100"
+
+services:
+
+  # ── NGINX reverse proxy ──────────────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: cgp_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.dev.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/frontend.conf:/etc/nginx/conf.d/frontend.conf:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - cgp_public
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Frontend (Vite dev server) ────────────────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: deps           # stop at deps stage for faster dev builds
+    container_name: cgp_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:4000
+      VITE_APP_ENV: development
+      BACKEND_PROXY_URL: http://backend:4000
+    volumes:
+      - ../frontend:/app
+      - /app/node_modules
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    networks:
+      - cgp_public
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5173"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Backend API ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: cgp_backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      <<: *backend-env
+    env_file:
+      - ./envs/.env.development
+    volumes:
+      - ../backend/src:/app/src              # hot-reload with nodemon
+      - backend_logs:/app/logs
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cgp_public
+      - cgp_internal
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── AI / ML Service ───────────────────────────────────────────────
+  ai_service:
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+      target: production
+    container_name: cgp_ai_service
+    restart: unless-stopped
+    ports:
+      - "5050:5050"           # expose for dev inspection only
+    environment:
+      PORT: "5050"
+      FLASK_DEBUG: "false"
+      AI_SERVICE_SECRET: dev_secret
+      WORKERS: "1"
+      THREADS: "2"
+    volumes:
+      - ai_artefacts:/app/models/artefacts
+      - ai_data:/app/data
+    networks:
+      - cgp_internal
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/healthz')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  # ── Background worker (Bull queue consumers) ──────────────────────
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: production
+    container_name: cgp_worker
+    restart: unless-stopped
+    command: ["node", "src/jobs/workers.js"]
+    environment:
+      <<: *backend-env
+    env_file:
+      - ./envs/.env.development
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ai_service:
+        condition: service_healthy
+    networks:
+      - cgp_internal
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+
+  # ── MongoDB ───────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: cgp_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"         # expose for local DB tools (Compass, etc.)
+    environment:
+      MONGO_INITDB_DATABASE: career_guidance
+    volumes:
+      - mongo_data:/data/db
+      - mongo_config:/data/configdb
+      - ./scripts/mongo-init.js:/docker-entrypoint-initdb.d/01-init.js:ro
+    networks:
+      - cgp_internal
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Redis ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: cgp_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
+    volumes:
+      - redis_data:/data
+    networks:
+      - cgp_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── MailHog (local SMTP + web UI) ──────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: cgp_mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"           # SMTP
+      - "8025:8025"           # Web UI → http://localhost:8025
+    networks:
+      - cgp_internal
+
+  # ── MinIO (local S3-compatible storage) ───────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: cgp_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"           # API
+      - "9001:9001"           # Console UI → http://localhost:9001
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    networks:
+      - cgp_internal
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ── MinIO bucket initializer ──────────────────────────────────────
+  minio_init:
+    image: minio/mc:latest
+    container_name: cgp_minio_init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin;
+        mc mb --ignore-existing local/career-reports;
+        mc mb --ignore-existing local/career-assets;
+        mc policy set public local/career-reports;
+        echo 'MinIO buckets initialized';
+      "
+    networks:
+      - cgp_internal
+
+  # ── Local Hardhat blockchain node ─────────────────────────────────
+  hardhat_node:
+    build:
+      context: ../blockchain
+      dockerfile: Dockerfile.hardhat
+    container_name: cgp_hardhat
+    restart: unless-stopped
+    ports:
+      - "8545:8545"
+    networks:
+      - cgp_internal
+
+# ── Named volumes ─────────────────────────────────────────────────
+volumes:
+  mongo_data:
+  mongo_config:
+  redis_data:
+  minio_data:
+  ai_artefacts:
+  ai_data:
+  backend_logs:
+  nginx_logs:
+
+# ── Networks ──────────────────────────────────────────────────────
+networks:
+  cgp_public:
+    driver: bridge
+    name: cgp_public
+  cgp_internal:
+    driver: bridge
+    name: cgp_internal
+    internal: false    # false in dev for package installs; true in prod

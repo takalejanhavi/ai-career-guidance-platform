@@ -1,0 +1,16 @@
+{
+  "name": "career-guidance-pdf-service",
+  "version": "1.0.0",
+  "description": "Production PDF report generator for AI Career Guidance Platform",
+  "main": "src/index.js",
+  "scripts": {
+    "generate": "node src/index.js",
+    "test": "node tests/test.js",
+    "demo": "node src/demo.js"
+  },
+  "dependencies": {
+    "pdfkit": "^0.15.0",
+    "qrcode": "^1.5.4",
+    "crypto": "^1.0.1"
+  }
+}

@@ -1,0 +1,73 @@
+# ──────────────────────────────────────────────────────────────────
+# Stage 1 — deps: Install production dependencies only
+# ──────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS deps
+
+# Install build tools needed for native modules (bcrypt)
+RUN apk add --no-cache python3 make g++ && \
+    ln -sf /usr/bin/python3 /usr/bin/python
+
+WORKDIR /app
+COPY package*.json ./
+
+RUN npm ci --omit=dev && \
+    npm rebuild bcrypt --build-from-source && \
+    # Remove npm cache to reduce layer size
+    npm cache clean --force
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 2 — builder: Run linting and build steps (if any)
+# ──────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+COPY package*.json ./
+# Install ALL deps including devDeps for build/lint
+RUN npm ci
+
+COPY . .
+
+# Validate syntax (catches import errors before deployment)
+RUN node --check src/server.js && \
+    node --check src/app.js && \
+    echo "Syntax check passed ✓"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 3 — production: Minimal runtime image
+# ──────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS production
+
+# Security: run as non-root
+RUN addgroup -g 1001 -S nodejs && \
+    adduser  -S backend -u 1001 -G nodejs
+
+WORKDIR /app
+
+# Copy production dependencies from deps stage
+COPY --from=deps --chown=backend:nodejs /app/node_modules ./node_modules
+
+# Copy application source
+COPY --chown=backend:nodejs . .
+
+# Create writable directories
+RUN mkdir -p logs && chown backend:nodejs logs
+
+# Remove dev artifacts
+RUN rm -rf tests/ *.test.js .eslintrc* .prettierrc*
+
+# Metadata
+LABEL maintainer="CareerAI Platform" \
+      service="backend" \
+      version="1.0.0"
+
+USER backend
+
+EXPOSE 4000
+
+# Healthcheck: hit /healthz endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget -qO- http://localhost:4000/healthz || exit 1
+
+CMD ["node", "src/server.js"]

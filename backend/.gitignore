@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.local
+.env.production
+logs/
+*.log
+coverage/
+dist/
+.nyc_output/
+artifacts/

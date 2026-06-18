@@ -1,0 +1,241 @@
+# ──────────────────────────────────────────────────────────────────
+# docker-compose.prod.yml — Production Stack
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from dev:
+#   - No source code mounts (immutable containers)
+#   - Resource limits enforced
+#   - Internal network isolation
+#   - No dev-only services (mailhog, minio, hardhat_node)
+#   - Read-only filesystems where possible
+#   - No exposed internal ports
+# ──────────────────────────────────────────────────────────────────
+
+version: '3.9'
+
+services:
+
+  # ── NGINX (production — with SSL) ─────────────────────────────────
+  nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deployment/nginx/careerguidance.conf:/etc/nginx/conf.d/careerguidance.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro           # SSL certs (managed by certbot)
+      - /var/www/certbot:/var/www/certbot:ro           # ACME challenge
+      - nginx_logs:/var/log/nginx
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    networks:
+      - cgp_public
+      - cgp_internal
+    deploy:
+      resources:
+        limits:
+          cpus:   '0.5'
+          memory: 256M
+        reservations:
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Certbot (SSL certificate renewal) ─────────────────────────────
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt
+      - /var/www/certbot:/var/www/certbot
+    # Renew twice daily (Let's Encrypt requirement)
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
+    networks:
+      - cgp_public
+
+  # ── Frontend ──────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: production
+      args:
+        VITE_API_URL:     ${VITE_API_URL}
+        VITE_APP_ENV:     production
+        VITE_APP_VERSION: ${APP_VERSION:-1.0.0}
+    restart: always
+    expose:
+      - "80"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    networks:
+      - cgp_internal
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus:   '0.25'
+          memory: 128M
+
+  # ── Backend API ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: always
+    expose:
+      - "4000"
+    environment:
+      NODE_ENV: production
+    env_file:
+      - ./deployment/envs/.env.production
+    volumes:
+      - backend_logs:/app/logs   # logs only — no source mounts
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - cgp_internal
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus:   '1.0'
+          memory: 512M
+        reservations:
+          cpus:   '0.25'
+          memory: 256M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── AI Service ────────────────────────────────────────────────────
+  ai_service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+      target: production
+    restart: always
+    expose:
+      - "5050"
+    environment:
+      PORT: "5050"
+      FLASK_DEBUG: "false"
+      AI_SERVICE_SECRET: ${AI_SERVICE_SECRET}
+      WORKERS: "2"
+      THREADS: "4"
+    volumes:
+      - ai_artefacts:/app/models/artefacts:ro
+    networks:
+      - cgp_internal
+    deploy:
+      resources:
+        limits:
+          cpus:   '2.0'
+          memory: 2G
+        reservations:
+          cpus:   '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5050/healthz', timeout=10)"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+
+  # ── Background worker ─────────────────────────────────────────────
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: always
+    command: ["node", "src/jobs/workers.js"]
+    env_file:
+      - ./deployment/envs/.env.production
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - cgp_internal
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus:   '1.0'
+          memory: 512M
+
+  # ── Redis ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    restart: always
+    expose:
+      - "6379"
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --tcp-keepalive 300
+      --timeout 0
+    volumes:
+      - redis_data:/data
+    networks:
+      - cgp_internal
+    deploy:
+      resources:
+        limits:
+          cpus:   '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+# ── Volumes ───────────────────────────────────────────────────────
+volumes:
+  redis_data:
+    driver: local
+  ai_artefacts:
+    driver: local
+  backend_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+
+# ── Networks ──────────────────────────────────────────────────────
+networks:
+  cgp_public:
+    driver: bridge
+    name: cgp_public
+  cgp_internal:
+    driver: bridge
+    name: cgp_internal
+    internal: true     # completely isolated from internet in prod

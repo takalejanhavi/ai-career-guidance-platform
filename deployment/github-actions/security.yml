@@ -1,0 +1,121 @@
+# ──────────────────────────────────────────────────────────────────
+# .github/workflows/security.yml — Security Scanning
+# Runs weekly + on dependency file changes
+# ──────────────────────────────────────────────────────────────────
+
+name: Security
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # Weekly Monday 02:00 UTC
+  push:
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/requirements.txt'
+      - '**/Dockerfile*'
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Audit backend
+        working-directory: backend
+        run: |
+          npm ci --ignore-scripts --quiet
+          npm audit --audit-level=moderate || true
+
+      - name: Audit frontend
+        working-directory: frontend
+        run: |
+          npm ci --quiet
+          npm audit --audit-level=moderate || true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+
+      - name: Safety check Python
+        working-directory: ai-service
+        run: |
+          pip install safety --quiet
+          safety check -r requirements.txt || true
+
+  docker-scan:
+    name: Docker Image Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: |
+          docker build -f deployment/dockerfiles/Dockerfile.backend \
+            --target production -t cgp-backend:scan ./backend
+
+      - name: Trivy scan — backend
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref:   cgp-backend:scan
+          format:      table
+          severity:    CRITICAL,HIGH
+          exit-code:   0
+
+      - name: Build AI image
+        run: |
+          docker build -f deployment/dockerfiles/Dockerfile.ai \
+            --target production -t cgp-ai:scan ./ai-service 2>/dev/null || \
+          echo "AI build skipped (training stage)"
+
+  secret-scan:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history for secret scan
+
+      - name: TruffleHog secret scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path:        ./
+          base:        ${{ github.event.repository.default_branch }}
+          head:        HEAD
+          extra_args:  --debug --only-verified
+        continue-on-error: true
+
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions:        read
+      contents:       read
+      security-events: write
+
+    strategy:
+      matrix:
+        language: [javascript, python]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries:   security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

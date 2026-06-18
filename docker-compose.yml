@@ -1,0 +1,13 @@
+# ──────────────────────────────────────────────────────────────────
+# Root docker-compose.yml — convenience wrapper
+#
+# The canonical compose definitions live in deployment/:
+#   deployment/docker-compose.yml       (development stack — used here)
+#   deployment/docker-compose.prod.yml  (production overlay)
+#
+# This file lets you run `docker compose up -d` from the repository
+# root (after extracting the zip) without typing the -f path.
+# ──────────────────────────────────────────────────────────────────
+
+include:
+  - deployment/docker-compose.yml

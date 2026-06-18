@@ -1,0 +1,93 @@
+# ──────────────────────────────────────────────────────────────────
+# Stage 1 — builder: Compile Python wheels
+# ──────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc g++ gfortran libopenblas-dev liblapack-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY requirements.txt .
+
+# Build wheels for faster install in production stage
+RUN pip install --upgrade pip && \
+    pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 2 — trainer: Train models (optional — bake trained models in)
+# ──────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS trainer
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements.txt
+
+COPY . .
+
+# Train and save model artefacts during build
+# (Set N_TRAIN_SAMPLES via --build-arg for different dataset sizes)
+ARG N_TRAIN_SAMPLES=12000
+RUN python data/generate_dataset.py && \
+    python models/train.py --no-tune && \
+    echo "Training complete — artefacts ready ✓"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Stage 3 — production: Minimal runtime
+# ──────────────────────────────────────────────────────────────────
+FROM python:3.11-slim AS production
+
+# Security: non-root user
+RUN groupadd -r aiservice && useradd -r -g aiservice -d /app aiservice
+
+# Runtime shared libraries only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libopenblas0 \
+    && rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+
+WORKDIR /app
+
+# Install from pre-built wheels (fast, no compiler needed)
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements.txt && \
+    rm -rf /wheels
+
+# Copy application code
+COPY --chown=aiservice:aiservice . .
+
+# Copy trained artefacts from trainer stage
+COPY --from=trainer --chown=aiservice:aiservice /app/models/artefacts ./models/artefacts
+COPY --from=trainer --chown=aiservice:aiservice /app/data/career_dataset.csv ./data/career_dataset.csv
+
+RUN mkdir -p logs && chown aiservice:aiservice logs
+
+LABEL maintainer="CareerAI Platform" \
+      service="ai-service" \
+      version="1.0.0"
+
+USER aiservice
+
+EXPOSE 5050
+
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5050/healthz', timeout=5)" || exit 1
+
+CMD ["gunicorn", \
+     "--config", "gunicorn.conf.py", \
+     "--bind", "0.0.0.0:5050", \
+     "--workers", "2", \
+     "--threads", "4", \
+     "--timeout", "120", \
+     "--access-logfile", "-", \
+     "--error-logfile", "-", \
+     "wsgi:application"]

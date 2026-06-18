@@ -1,0 +1,230 @@
+# ──────────────────────────────────────────────────────────────────
+# render.yaml — Render.com Infrastructure Blueprint
+#
+# Deploy: Connect GitHub repo to Render, this file is auto-detected.
+# Docs:   https://render.com/docs/blueprint-spec
+# ──────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Backend API ───────────────────────────────────────────────────
+  - type:   web
+    name:   cgp-backend
+    env:    node
+    region: oregon           # us-west-2 — closest to MongoDB Atlas US-East
+
+    plan:   standard         # 1 vCPU, 2GB RAM
+    # Upgrade to pro for production load: pro → 2 vCPU, 4GB RAM
+
+    buildCommand:  >
+      npm ci --omit=dev &&
+      npm rebuild bcrypt --build-from-source
+
+    startCommand:  node src/server.js
+
+    healthCheckPath: /healthz
+
+    autoDeploy:    true      # Deploy on every push to main
+
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+      targetMemoryPercent: 80
+      targetCPUPercent:    70
+
+    envVars:
+      - key:   NODE_ENV
+        value: production
+      - key:   PORT
+        value: "4000"
+      - key:   MONGODB_URI
+        sync:  false         # Set in Render dashboard (secret)
+      - key:   JWT_PRIVATE_KEY
+        sync:  false
+      - key:   JWT_PUBLIC_KEY
+        sync:  false
+      - key:   JWT_ACCESS_EXPIRES
+        value: 15m
+      - key:   JWT_REFRESH_EXPIRES
+        value: 7d
+      - key:   REDIS_URL
+        fromService:
+          name:     cgp-redis
+          type:     redis
+          property: connectionString
+      - key:   AI_SERVICE_URL
+        fromService:
+          name:     cgp-ai-service
+          type:     web
+          property: host
+      - key:   AI_SERVICE_SECRET
+        sync:  false
+      - key:   SMTP_HOST
+        value: smtp.resend.com
+      - key:   SMTP_PORT
+        value: "465"
+      - key:   SMTP_USER
+        value: resend
+      - key:   SMTP_PASS
+        sync:  false
+      - key:   EMAIL_FROM
+        value: "CareerAI <noreply@careerguidance.app>"
+      - key:   S3_ENDPOINT
+        value: https://s3.amazonaws.com
+      - key:   S3_BUCKET
+        value: career-guidance-reports-prod
+      - key:   S3_REGION
+        value: us-east-1
+      - key:   S3_ACCESS_KEY
+        sync:  false
+      - key:   S3_SECRET_KEY
+        sync:  false
+      - key:   BLOCKCHAIN_RPC_URL
+        value: https://polygon-rpc.com
+      - key:   BLOCKCHAIN_PRIVATE_KEY
+        sync:  false
+      - key:   CONTRACT_ADDRESS
+        sync:  false
+      - key:   BLOCKCHAIN_NETWORK
+        value: polygon
+      - key:   FRONTEND_URL
+        value: https://careerguidance.app
+      - key:   RATE_LIMIT_MAX
+        value: "100"
+      - key:   AUTH_RATE_LIMIT_MAX
+        value: "10"
+      - key:   LOG_LEVEL
+        value: info
+
+  # ── Frontend (Static Site) ────────────────────────────────────────
+  - type:        static
+    name:        cgp-frontend
+    buildCommand: >
+      cd frontend &&
+      npm ci &&
+      npm run build
+    staticPublishPath: frontend/dist
+    pullRequestPreviewsEnabled: true
+
+    headers:
+      - path:  /assets/*
+        name:  Cache-Control
+        value: public, max-age=31536000, immutable
+      - path:  /*
+        name:  X-Frame-Options
+        value: SAMEORIGIN
+      - path:  /*
+        name:  X-Content-Type-Options
+        value: nosniff
+
+    routes:
+      - type:   rewrite
+        source: /*
+        destination: /index.html
+
+    envVars:
+      - key:   VITE_API_URL
+        value: https://api.careerguidance.app
+      - key:   VITE_APP_ENV
+        value: production
+
+  # ── AI Service ────────────────────────────────────────────────────
+  - type:   web
+    name:   cgp-ai-service
+    env:    python
+    region: oregon
+
+    plan:   standard-plus    # 2 vCPU, 4GB RAM — needed for ML inference
+
+    buildCommand:  >
+      pip install -r requirements.txt &&
+      python data/generate_dataset.py &&
+      python models/train.py --no-tune
+
+    startCommand:  >
+      gunicorn
+      --bind 0.0.0.0:$PORT
+      --workers 2
+      --threads 4
+      --timeout 120
+      wsgi:application
+
+    healthCheckPath: /healthz
+
+    autoDeploy:    true
+
+    envVars:
+      - key:   PORT
+        value: "5050"
+      - key:   FLASK_DEBUG
+        value: "false"
+      - key:   AI_SERVICE_SECRET
+        sync:  false
+      - key:   WORKERS
+        value: "2"
+      - key:   THREADS
+        value: "4"
+      - key:   TIMEOUT
+        value: "120"
+
+  # ── Background Worker ─────────────────────────────────────────────
+  - type:         worker
+    name:         cgp-worker
+    env:          node
+    region:       oregon
+    plan:         standard
+
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: node src/jobs/workers.js
+
+    envVars:
+      - key:   NODE_ENV
+        value: production
+      - key:   REDIS_URL
+        fromService:
+          name:     cgp-redis
+          type:     redis
+          property: connectionString
+      - key:   MONGODB_URI
+        sync:  false
+      - key:   AI_SERVICE_URL
+        fromService:
+          name:     cgp-ai-service
+          type:     web
+          property: host
+      - key:   AI_SERVICE_SECRET
+        sync:  false
+      - key:   JWT_PRIVATE_KEY
+        sync:  false
+      - key:   JWT_PUBLIC_KEY
+        sync:  false
+      - key:   S3_BUCKET
+        value: career-guidance-reports-prod
+      - key:   S3_ACCESS_KEY
+        sync:  false
+      - key:   S3_SECRET_KEY
+        sync:  false
+      - key:   BLOCKCHAIN_RPC_URL
+        value: https://polygon-rpc.com
+      - key:   BLOCKCHAIN_PRIVATE_KEY
+        sync:  false
+      - key:   CONTRACT_ADDRESS
+        sync:  false
+      - key:   SMTP_HOST
+        value: smtp.resend.com
+      - key:   SMTP_PORT
+        value: "465"
+      - key:   SMTP_USER
+        value: resend
+      - key:   SMTP_PASS
+        sync:  false
+      - key:   EMAIL_FROM
+        value: "CareerAI <noreply@careerguidance.app>"
+
+  # ── Redis ─────────────────────────────────────────────────────────
+  - type:    redis
+    name:    cgp-redis
+    region:  oregon
+    plan:    standard        # 25MB free; upgrade to starter (100MB) for production
+    ipAllowList: []           # only allow Render internal network
+    maxmemoryPolicy: allkeys-lru

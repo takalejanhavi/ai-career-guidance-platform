@@ -1,0 +1,127 @@
+version: '3.9'
+
+services:
+
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      target: production
+    container_name: cgp_backend
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV:             development
+      PORT:                 4000
+      MONGODB_URI:          mongodb://mongo:27017/career_guidance
+      REDIS_URL:            redis://redis:6379
+      FRONTEND_URL:         http://localhost:5173
+      AI_SERVICE_URL:       http://ai_service:5050
+      # Remaining secrets from .env file:
+      JWT_PRIVATE_KEY:      ${JWT_PRIVATE_KEY}
+      JWT_PUBLIC_KEY:       ${JWT_PUBLIC_KEY}
+      JWT_ACCESS_EXPIRES:   15m
+      JWT_REFRESH_EXPIRES:  7d
+      AI_SERVICE_SECRET:    ${AI_SERVICE_SECRET}
+      SMTP_HOST:            ${SMTP_HOST:-mailhog}
+      SMTP_PORT:            ${SMTP_PORT:-1025}
+      SMTP_USER:            ${SMTP_USER:-test}
+      SMTP_PASS:            ${SMTP_PASS:-test}
+      EMAIL_FROM:           ${EMAIL_FROM:-dev@career.local}
+      S3_BUCKET:            ${S3_BUCKET:-career-reports}
+      S3_ACCESS_KEY:        ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY:        ${S3_SECRET_KEY:-minioadmin}
+      S3_ENDPOINT:          http://minio:9000
+      S3_REGION:            us-east-1
+      LOG_LEVEL:            debug
+    volumes:
+      - ./logs:/app/logs
+      - ./src:/app/src    # hot reload for dev; remove in prod
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cgp_net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+
+  # ── MongoDB ──────────────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:7.0
+    container_name: cgp_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - cgp_net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout:  5s
+      retries:  5
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: cgp_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - cgp_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+
+  # ── MailHog (local SMTP / email UI) ──────────────────────────────────────────
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: cgp_mailhog
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI
+    networks:
+      - cgp_net
+
+  # ── MinIO (local S3) ──────────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: cgp_minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # MinIO Console UI
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    networks:
+      - cgp_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+
+volumes:
+  mongo_data:
+  redis_data:
+  minio_data:
+
+networks:
+  cgp_net:
+    driver: bridge

@@ -1,0 +1,42 @@
+# ──────────────────────────────────────────────────────────────────
+# Dockerfile.hardhat — Local Hardhat Network Node
+# Used by docker-compose.yml as the hardhat_node service
+#
+# Exposes a JSON-RPC endpoint on port 8545 that mimics Ethereum
+# mainnet, pre-loaded with 10 funded test wallets and instant
+# block mining for development use.
+# ──────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine
+
+# git is required by some Hardhat plugins for version detection
+RUN apk add --no-cache git python3 make g++
+
+WORKDIR /app
+
+# Copy dependency manifests first for layer caching —
+# node_modules are rebuilt only when package*.json changes
+COPY package*.json ./
+
+# Install all dependencies (devDependencies included —
+# hardhat itself is a devDependency)
+RUN npm ci
+
+# Copy the rest of the project (contracts, config, scripts)
+COPY . .
+
+# Compile contracts so the node starts with fresh artifacts
+RUN npx hardhat compile
+
+# Hardhat JSON-RPC port
+EXPOSE 8545
+
+# Healthcheck: poll the JSON-RPC endpoint with eth_blockNumber
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=5 \
+  CMD wget -qO- --post-data='{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' \
+      --header='Content-Type: application/json' \
+      http://localhost:8545 || exit 1
+
+# Start the Hardhat node bound to all interfaces so Docker
+# networking can reach it from other containers
+CMD ["npx", "hardhat", "node", "--hostname", "0.0.0.0", "--port", "8545"]

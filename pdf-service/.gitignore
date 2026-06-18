@@ -1,0 +1,12 @@
+# Dependencies
+node_modules/
+
+# Generated output
+output/
+*.pdf
+
+# Environment
+.env
+
+# Logs
+*.log

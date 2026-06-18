@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────────
+# nixpacks.toml — Railway Nixpacks build config for backend
+# Alternative to Dockerfile when using Railway's Nixpacks builder
+# ──────────────────────────────────────────────────────────────────
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "python310", "gcc", "gnumake"]
+
+[phases.install]
+cmds = [
+  "npm ci --omit=dev",
+  "npm rebuild bcrypt --build-from-source"
+]
+
+[phases.build]
+cmds = [
+  "node --check src/server.js"
+]
+
+[start]
+cmd = "node src/server.js"
+
+[variables]
+NODE_ENV = "production"
+PORT     = "4000"

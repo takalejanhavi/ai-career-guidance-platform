@@ -1,0 +1,51 @@
+# ── Dependencies ──────────────────────────────────────────────────
+node_modules/
+.npm/
+.npm-global/
+
+# ── Environment files (never commit real secrets) ───────────────────
+.env
+.env.local
+.env.*.local
+!deployment/envs/.env.development
+!deployment/envs/.env.staging
+!deployment/envs/.env.production
+!**/.env.example
+
+# ── Build outputs ─────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+
+# ── Logs ──────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# ── AI model artefacts (generated at build time) ────────────────────
+ai-service/models/artefacts/
+ai-service/data/*.csv
+
+# ── Hardhat / Blockchain ──────────────────────────────────────────
+blockchain/artifacts/
+blockchain/cache/
+blockchain/deployments/localhost.json
+blockchain/typechain-types/
+
+# ── Editor / OS ───────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Misc ──────────────────────────────────────────────────────────
+*.tar.gz
+coverage/
+.cache/

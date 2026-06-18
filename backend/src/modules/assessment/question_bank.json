@@ -1,0 +1,35 @@
+[
+  { "id": "apt_001", "section": "aptitude",     "type": "likert", "text": "I can solve complex mathematical problems easily.",               "scale": 5 },
+  { "id": "apt_002", "section": "aptitude",     "type": "likert", "text": "I enjoy analyzing data to find patterns.",                        "scale": 5 },
+  { "id": "apt_003", "section": "aptitude",     "type": "likert", "text": "I can communicate complex ideas clearly in writing.",             "scale": 5 },
+  { "id": "apt_004", "section": "aptitude",     "type": "likert", "text": "I pick up new technical skills quickly.",                         "scale": 5 },
+  { "id": "apt_005", "section": "aptitude",     "type": "likert", "text": "I am good at understanding spatial relationships.",               "scale": 5 },
+
+  { "id": "int_001", "section": "interest",     "type": "likert", "text": "I enjoy working with computers and technology.",                  "scale": 5 },
+  { "id": "int_002", "section": "interest",     "type": "likert", "text": "I like helping others solve their problems.",                     "scale": 5 },
+  { "id": "int_003", "section": "interest",     "type": "likert", "text": "I am interested in how living organisms work.",                   "scale": 5 },
+  { "id": "int_004", "section": "interest",     "type": "likert", "text": "Creating art or music brings me joy.",                           "scale": 5 },
+  { "id": "int_005", "section": "interest",     "type": "likert", "text": "I enjoy studying how societies and economies function.",          "scale": 5 },
+  { "id": "int_006", "section": "interest",     "type": "likert", "text": "I like building or fixing physical objects.",                     "scale": 5 },
+  { "id": "int_007", "section": "interest",     "type": "likert", "text": "I enjoy exploring business and entrepreneurship.",               "scale": 5 },
+
+  { "id": "per_001", "section": "personality",  "type": "likert", "text": "I prefer working in teams rather than alone.",                   "scale": 5 },
+  { "id": "per_002", "section": "personality",  "type": "likert", "text": "I stay calm and focused under deadline pressure.",               "scale": 5 },
+  { "id": "per_003", "section": "personality",  "type": "likert", "text": "I enjoy taking initiative on new projects.",                     "scale": 5 },
+  { "id": "per_004", "section": "personality",  "type": "likert", "text": "I prefer structured routines over flexible schedules.",          "scale": 5 },
+  { "id": "per_005", "section": "personality",  "type": "likert", "text": "I am comfortable presenting ideas to large groups.",             "scale": 5 },
+  { "id": "per_006", "section": "personality",  "type": "likert", "text": "I pay close attention to small details.",                       "scale": 5 },
+
+  { "id": "val_001", "section": "values",       "type": "likert", "text": "Job security and stability are very important to me.",           "scale": 5 },
+  { "id": "val_002", "section": "values",       "type": "likert", "text": "I want my work to make a positive impact on society.",           "scale": 5 },
+  { "id": "val_003", "section": "values",       "type": "likert", "text": "Financial reward is my primary career motivation.",              "scale": 5 },
+  { "id": "val_004", "section": "values",       "type": "likert", "text": "Work-life balance is more important than a high salary.",        "scale": 5 },
+  { "id": "val_005", "section": "values",       "type": "likert", "text": "I value continuous learning and intellectual growth.",           "scale": 5 },
+  { "id": "val_006", "section": "values",       "type": "likert", "text": "Recognition and status in my field matter to me.",              "scale": 5 },
+
+  { "id": "ls_001",  "section": "learning_style","type": "likert", "text": "I learn best by doing hands-on tasks.",                        "scale": 5 },
+  { "id": "ls_002",  "section": "learning_style","type": "likert", "text": "I prefer reading and studying on my own.",                      "scale": 5 },
+  { "id": "ls_003",  "section": "learning_style","type": "likert", "text": "I grasp concepts better through diagrams and visual aids.",     "scale": 5 },
+  { "id": "ls_004",  "section": "learning_style","type": "likert", "text": "I learn effectively through discussion and debate.",            "scale": 5 },
+  { "id": "ls_005",  "section": "learning_style","type": "likert", "text": "I prefer structured, step-by-step instructions.",              "scale": 5 }
+]
