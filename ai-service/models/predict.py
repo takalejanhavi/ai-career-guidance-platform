@@ -20,19 +20,35 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import joblib
+import sys
 
 warnings.filterwarnings("ignore")
 
 # ── Paths ──────────────────────────────────────────────────────────
-ROOT      = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ROOT))
 MODEL_DIR = ROOT / "models" / "artefacts"
 
 # ── Input feature order ────────────────────────────────────────────
 RAW_FEATURES = [
-    "math_score", "science_score", "english_score",
-    "communication", "leadership", "creativity",
-    "analytical_thinking", "extroversion", "conscientiousness",
+    "math_score",
+    "science_score",
+    "english_score",
+    "communication",
+    "leadership",
+    "creativity",
+    "analytical_thinking",
+    "extroversion",
+    "conscientiousness",
     "extracurricular",
+    "coding_interest",
+    "biology_interest",
+    "business_interest",
+    "design_interest",
+    "teaching_interest",
+    "research_interest",
+    "people_helping_interest",
+    "entrepreneurship_interest",
 ]
 
 # ── Career narrative explanations ─────────────────────────────────
@@ -117,6 +133,113 @@ CAREER_NARRATIVES = {
         "salary_usd":  (45_000, 85_000),
     },
 }
+# ── Career Subfields ───────────────────────────────────────────────
+CAREER_SUBFIELDS = {
+
+    "Software Engineer": {
+        "Backend Developer": ["coding_interest", "analytical_thinking"],
+        "Frontend Developer": ["coding_interest", "creativity", "communication"],
+        "Full Stack Developer": ["coding_interest", "analytical_thinking", "communication"],
+        "Cloud Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"],
+        "DevOps Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"]
+    },
+
+    "Data Scientist": {
+        "Machine Learning Engineer": ["coding_interest", "research_interest", "analytical_thinking"],
+        "Data Analyst": ["analytical_thinking", "math_score", "communication"],
+        "AI Engineer": ["coding_interest", "research_interest", "science_score"],
+        "Data Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"],
+        "Business Intelligence Analyst": ["business_interest", "analytical_thinking", "communication"]
+    },
+
+    "Biomedical Researcher": {
+        "Genetics Researcher": ["biology_interest", "research_interest", "science_score"],
+        "Microbiologist": ["biology_interest", "science_score", "analytical_thinking"],
+        "Clinical Research Associate": ["research_interest", "communication", "science_score"],
+        "Biotechnology Researcher": ["biology_interest", "research_interest", "analytical_thinking"],
+        "Biomedical Scientist": ["biology_interest", "science_score", "research_interest"]
+    },
+
+    "Civil Engineer": {
+        "Structural Engineer": ["math_score", "analytical_thinking", "science_score"],
+        "Transportation Engineer": ["math_score", "leadership", "analytical_thinking"],
+        "Construction Manager": ["leadership", "communication", "conscientiousness"],
+        "Environmental Engineer": ["science_score", "research_interest", "analytical_thinking"],
+        "Geotechnical Engineer": ["math_score", "science_score", "analytical_thinking"]
+    },
+
+    "Business Analyst": {
+        "Product Analyst": ["business_interest", "analytical_thinking", "communication"],
+        "Operations Analyst": ["business_interest", "analytical_thinking", "conscientiousness"],
+        "Strategy Consultant": ["business_interest", "leadership", "communication"],
+        "Market Research Analyst": ["business_interest", "research_interest", "communication"],
+        "Business Analyst": ["business_interest", "analytical_thinking", "communication"]
+    },
+
+    "Entrepreneur": {
+        "Startup Founder": ["entrepreneurship_interest", "leadership", "communication"],
+        "Tech Entrepreneur": ["entrepreneurship_interest", "coding_interest", "leadership"],
+        "E-commerce Entrepreneur": ["entrepreneurship_interest", "business_interest", "communication"],
+        "Business Owner": ["entrepreneurship_interest", "leadership", "conscientiousness"],
+        "Social Entrepreneur": ["entrepreneurship_interest", "people_helping_interest", "leadership"]
+    },
+
+    "Marketing Manager": {
+        "Digital Marketing Manager": ["communication", "creativity", "business_interest"],
+        "Brand Manager": ["leadership", "communication", "creativity"],
+        "SEO Specialist": ["analytical_thinking", "communication", "business_interest"],
+        "Content Marketing Manager": ["communication", "creativity", "english_score"],
+        "Social Media Strategist": ["communication", "creativity", "extroversion"]
+    },
+
+    "Graphic Designer": {
+        "UI/UX Designer": ["design_interest", "creativity", "communication"],
+        "Motion Designer": ["design_interest", "creativity", "analytical_thinking"],
+        "Brand Designer": ["design_interest", "communication", "creativity"],
+        "Illustrator": ["design_interest", "creativity", "english_score"],
+        "Game Artist": ["design_interest", "creativity", "coding_interest"]
+    },
+
+    "Content Writer": {
+        "Technical Writer": ["english_score", "communication", "coding_interest"],
+        "Copywriter": ["english_score", "creativity", "communication"],
+        "Editor": ["english_score", "conscientiousness", "communication"],
+        "Journalist": ["english_score", "communication", "research_interest"],
+        "Content Writer": ["english_score", "creativity", "communication"]
+    },
+
+    "Architect": {
+        "Interior Designer": ["design_interest", "creativity", "communication"],
+        "Urban Planner": ["analytical_thinking", "leadership", "design_interest"],
+        "Landscape Architect": ["design_interest", "creativity", "science_score"],
+        "Sustainable Design Consultant": ["design_interest", "research_interest", "science_score"],
+        "Architect": ["design_interest", "math_score", "creativity"]
+    },
+
+    "Medical Doctor": {
+        "Cardiologist": ["biology_interest", "science_score", "research_interest"],
+        "Neurologist": ["biology_interest", "research_interest", "analytical_thinking"],
+        "Pediatrician": ["people_helping_interest", "communication", "biology_interest"],
+        "Orthopedic Surgeon": ["biology_interest", "science_score", "conscientiousness"],
+        "General Physician": ["biology_interest", "science_score", "communication"]
+    },
+
+    "Psychologist": {
+        "Clinical Psychologist": ["people_helping_interest", "communication", "conscientiousness"],
+        "Counseling Psychologist": ["people_helping_interest", "communication"],
+        "School Psychologist": ["people_helping_interest", "teaching_interest", "communication"],
+        "Behavioral Therapist": ["people_helping_interest", "communication", "analytical_thinking"],
+        "Industrial Psychologist": ["communication", "leadership", "analytical_thinking"]
+    },
+
+    "Teacher / Educator": {
+        "Professor": ["teaching_interest", "research_interest", "communication"],
+        "Lecturer": ["teaching_interest", "communication", "leadership"],
+        "Academic Counselor": ["people_helping_interest", "communication", "leadership"],
+        "School Teacher": ["teaching_interest", "communication", "people_helping_interest"],
+        "Curriculum Designer": ["teaching_interest", "creativity", "communication"]
+    }
+}
 
 
 # ── Data classes ───────────────────────────────────────────────────
@@ -124,17 +247,18 @@ CAREER_NARRATIVES = {
 class CareerMatch:
     rank:             int
     career:           str
-    confidence:       float          # 0–1, ensemble probability
-    confidence_pct:   float          # confidence * 100, rounded
-    confidence_tier:  str            # "Very High" | "High" | "Moderate" | "Low"
+    confidence:       float
+    confidence_pct:   float
+    confidence_tier:  str
     rf_confidence:    float
     xgb_confidence:   float
-    model_agreement:  float          # 1 - |rf - xgb| / max
+    model_agreement:  float
     description:      str
     key_traits:       list[str]
     growth_outlook:   str
-    salary_range_usd: tuple[int,int]
-    top_drivers:      list[dict]     # feature contribution explanations
+    salary_range_usd: tuple[int, int]
+    top_drivers:      list[dict]
+    recommended_roles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -143,8 +267,37 @@ class PredictionResult:
     input_features:       dict
     engineered_features:  dict
     confidence_summary:   dict
-    model_version:        str        = "1.0.0"
-    n_classes:            int        = 13
+    model_version:        str = "1.0.0"
+    n_classes:            int = 13
+
+
+def get_dynamic_roles(career: str, profile: dict, top_n: int = 3):
+
+    role_map = CAREER_SUBFIELDS.get(career, {})
+
+    if not role_map:
+        return []
+
+    role_scores = {}
+
+    for role, features in role_map.items():
+
+        vals = []
+
+        for feat in features:
+            if feat in profile:
+                vals.append(profile[feat])
+
+        if vals:
+            role_scores[role] = sum(vals) / len(vals)
+
+    ranked = sorted(
+        role_scores.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    return [role for role, _ in ranked[:top_n]]
 
 
 # ── Predictor class ────────────────────────────────────────────────
@@ -295,21 +448,24 @@ class CareerPredictor:
 
             drivers = self._feature_drivers(X_eng, idx, top_n=5)
 
+            recommended_roles = get_dynamic_roles(     career_name,     validated,     top_n=3 )
+
             matches.append(CareerMatch(
-                rank             = rank,
-                career           = career_name,
-                confidence       = round(conf, 4),
-                confidence_pct   = round(conf * 100, 1),
-                confidence_tier  = self._confidence_tier(conf),
-                rf_confidence    = round(rf_conf, 4),
-                xgb_confidence   = round(xgb_conf, 4),
-                model_agreement  = round(agreement, 4),
-                description      = narr["description"],
-                key_traits       = narr["key_traits"],
-                growth_outlook   = narr["growth"],
-                salary_range_usd = narr["salary_usd"],
-                top_drivers      = drivers,
-            ))
+    rank             = rank,
+    career           = career_name,
+    confidence       = round(conf, 4),
+    confidence_pct   = round(conf * 100, 1),
+    confidence_tier  = self._confidence_tier(conf),
+    rf_confidence    = round(rf_conf, 4),
+    xgb_confidence   = round(xgb_conf, 4),
+    model_agreement  = round(agreement, 4),
+    description      = narr["description"],
+    key_traits       = narr["key_traits"],
+    growth_outlook   = narr["growth"],
+    salary_range_usd = narr["salary_usd"],
+    top_drivers      = drivers,
+    recommended_roles = recommended_roles,
+))
 
         # Confidence summary
         top_conf    = float(ens_proba[ranked_idx[0]])
@@ -367,17 +523,27 @@ def get_predictor() -> CareerPredictor:
 if __name__ == "__main__":
     # Quick smoke test
     sample = {
-        "math_score":          88,
-        "science_score":       82,
-        "english_score":       70,
-        "communication":       65,
-        "leadership":          60,
-        "creativity":          72,
-        "analytical_thinking": 90,
-        "extroversion":        45,
-        "conscientiousness":   82,
-        "extracurricular":     55,
-    }
+    "math_score": 85,
+    "science_score": 80,
+    "english_score": 80,
+    "communication": 75,
+    "leadership": 70,
+    "creativity": 70,
+    "analytical_thinking": 85,
+    "extroversion": 65,
+    "conscientiousness": 80,
+    "extracurricular": 70,
+
+    "coding_interest": 75,
+    "biology_interest": 40,
+    "business_interest": 65,
+    "design_interest": 50,
+    "teaching_interest": 50,
+    "research_interest": 75,
+    "people_helping_interest": 50,
+    "entrepreneurship_interest": 65,
+}
+    
 
     print("Loading predictor…")
     predictor = get_predictor()
@@ -394,5 +560,10 @@ if __name__ == "__main__":
         print(f"    Key traits : {', '.join(m.key_traits[:3])}")
         print(f"    Salary     : ${m.salary_range_usd[0]:,}–${m.salary_range_usd[1]:,}")
         print(f"    Top driver : {m.top_drivers[0]['feature']} ({m.top_drivers[0]['direction']})")
+
+        if m.recommended_roles:
+             print("    Suggested Roles:")
+             for role in m.recommended_roles:
+                print(f"      • {role}")
 
     print(f"\nSummary: {result.confidence_summary}")
