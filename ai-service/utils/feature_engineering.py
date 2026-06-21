@@ -20,9 +20,12 @@ from sklearn.preprocessing import StandardScaler
 
 # ── Raw feature names ─────────────────────────────────────────────
 RAW_FEATURES = [
+    # Academic
     "math_score",
     "science_score",
     "english_score",
+
+    # Personality
     "communication",
     "leadership",
     "creativity",
@@ -30,6 +33,16 @@ RAW_FEATURES = [
     "extroversion",
     "conscientiousness",
     "extracurricular",
+
+    # Interests
+    "coding_interest",
+    "biology_interest",
+    "business_interest",
+    "design_interest",
+    "teaching_interest",
+    "research_interest",
+    "people_helping_interest",
+    "entrepreneurship_interest",
 ]
 
 
@@ -140,7 +153,43 @@ class FeatureEngineer(BaseEstimator, TransformerMixin):
             + d["conscientiousness"]
             + d["communication"]
         ) / 5.0
+        # Career orientation composites
 
+        d["technical_orientation"] = (
+    0.45 * d["coding_interest"]
+    + 0.30 * d["analytical_thinking"]
+    + 0.25 * d["math_score"]
+)
+
+        d["healthcare_orientation"] = (
+    0.45 * d["biology_interest"]
+    + 0.30 * d["science_score"]
+    + 0.25 * d["people_helping_interest"]
+)
+
+        d["business_orientation"] = (
+    0.45 * d["business_interest"]
+    + 0.30 * d["leadership"]
+    + 0.25 * d["communication"]
+)
+
+        d["creative_orientation"] = (
+    0.50 * d["design_interest"]
+    + 0.30 * d["creativity"]
+    + 0.20 * d["english_score"]
+)
+
+        d["education_orientation"] = (
+    0.50 * d["teaching_interest"]
+    + 0.30 * d["people_helping_interest"]
+    + 0.20 * d["communication"]
+)
+
+        d["research_orientation"] = (
+    0.50 * d["research_interest"]
+    + 0.30 * d["analytical_thinking"]
+    + 0.20 * d["science_score"]
+)
         # ── Balance ratio (-100..100, positive → STEM-leaning) ────
         d["stem_vs_social_ratio"] = d["stem_aptitude"] - d["social_aptitude"]
 
@@ -158,6 +207,26 @@ class FeatureEngineer(BaseEstimator, TransformerMixin):
         d["interact_scientific_rigour"] = (
             (d["science_score"] / 100) * (d["conscientiousness"] / 100) * 100
         )
+         
+        d["interact_coding_analytical"] = (
+            d["coding_interest"] * d["analytical_thinking"] / 100
+)
+
+        d["interact_biology_science"] = (
+             d["biology_interest"] * d["science_score"] / 100
+)
+
+        d["interact_design_creativity"] = (
+             d["design_interest"] * d["creativity"] / 100
+)
+
+        d["interact_business_leadership"] = (
+            d["business_interest"] * d["leadership"] / 100
+)
+
+        d["interact_teaching_helping"] = (
+            d["teaching_interest"] * d["people_helping_interest"] / 100
+)
 
         # ── Score variance (student specialisation vs breadth) ────
         score_cols = ["math_score", "science_score", "english_score"]
