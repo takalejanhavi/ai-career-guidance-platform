@@ -65,9 +65,18 @@ if (env.NODE_ENV !== 'test') {
   app.use(morgan('combined', { stream: logger.stream }));
 }
 
-// ─── Health check (no auth, no rate limit) ────────────────────────────────────
+// ─── Health / readiness (no auth, no rate limit) ─────────────────────────────
 app.get('/healthz', (req, res) => {
   res.json({ status: 'ok', env: env.NODE_ENV, ts: new Date().toISOString() });
+});
+
+app.get('/readyz', (req, res) => {
+  const mongoose = require('mongoose');
+  const dbState  = mongoose.connection.readyState; // 1 = connected
+  if (dbState !== 1) {
+    return res.status(503).json({ status: 'unavailable', db: 'disconnected' });
+  }
+  res.json({ status: 'ready', db: 'connected', ts: new Date().toISOString() });
 });
 
 // ─── API routes ───────────────────────────────────────────────────────────────

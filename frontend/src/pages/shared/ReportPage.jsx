@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   FileText, Download, Share2, Shield, CheckCircle2, Clock,
   ExternalLink, ChevronRight, Star, TrendingUp, Brain, ArrowLeft,
-  Lock, Globe, Users, MessageSquare
+  Lock, Globe, Users, MessageSquare, Lightbulb, ChevronDown, ChevronUp,
+  Zap, BarChart2
 } from 'lucide-react';
 import { reportApi } from '@/services/api';
 import { useAuthStore } from '@/store/authStore';
@@ -21,6 +22,134 @@ const matchColor = (score) => {
   return 'text-danger';
 };
 
+// ── Confidence tier helpers ────────────────────────────────────────────────
+const TIER_CONFIG = {
+  HIGH:      { label: 'HIGH',     color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25', dot: 'bg-emerald-400' },
+  MEDIUM:    { label: 'MEDIUM',   color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/25',     dot: 'bg-amber-400'   },
+  EMERGING:  { label: 'EMERGING', color: 'text-orange-400',  bg: 'bg-orange-500/10 border-orange-500/25',   dot: 'bg-orange-400'  },
+  LOW:       { label: 'LOW',      color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/25',         dot: 'bg-red-400'     },
+  // legacy v1.0.x
+  'Very High': { label: 'HIGH',   color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25', dot: 'bg-emerald-400' },
+  'High':      { label: 'HIGH',   color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25', dot: 'bg-emerald-400' },
+  'Moderate':  { label: 'MEDIUM', color: 'text-amber-400',   bg: 'bg-amber-500/10 border-amber-500/25',     dot: 'bg-amber-400'   },
+  'Low':       { label: 'LOW',    color: 'text-red-400',     bg: 'bg-red-500/10 border-red-500/25',         dot: 'bg-red-400'     },
+};
+
+function ConfidenceTierBadge({ tier }) {
+  const cfg = TIER_CONFIG[tier] || TIER_CONFIG.LOW;
+  return (
+    <span className={clsx('inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-bold tracking-wide', cfg.bg, cfg.color)}>
+      <span className={clsx('w-1.5 h-1.5 rounded-full', cfg.dot)} />
+      {cfg.label}
+    </span>
+  );
+}
+
+function ModelAgreementBar({ agreement }) {
+  if (agreement == null) return null;
+  const pct = Math.round(agreement * 100);
+  const color = pct >= 80 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-red-500';
+  return (
+    <div className="mt-2">
+      <div className="flex justify-between text-xs text-muted mb-1">
+        <span title="How closely Random Forest and XGBoost agree on this prediction">Model agreement</span>
+        <span className="font-medium text-secondary">{pct}%</span>
+      </div>
+      <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">
+        <div className={clsx('h-full rounded-full transition-all', color)} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function SpecializedPaths({ roles }) {
+  const [open, setOpen] = useState(false);
+  if (!roles?.length) return null;
+  return (
+    <div className="mt-3 border border-border rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold text-secondary hover:bg-border/40 transition-colors"
+      >
+        <span className="flex items-center gap-1.5">
+          <Zap className="w-3.5 h-3.5 text-indigo-400" />
+          Specialized Paths ({roles.length})
+        </span>
+        {open ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="px-4 pb-3 space-y-1.5 overflow-hidden"
+          >
+            {roles.map((role, i) => (
+              <div key={role} className="flex items-center gap-2 text-sm text-secondary">
+                <span className="w-5 h-5 rounded-full bg-indigo-500/15 text-indigo-400 text-xs flex items-center justify-center font-bold shrink-0">{i + 1}</span>
+                {role}
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function WhyMatchModal({ open, onClose, career }) {
+  if (!career) return null;
+  const drivers = career.topDrivers || [];
+  const maxImpact = Math.max(...drivers.map(d => Math.abs(d.impact)), 0.001);
+  return (
+    <Modal open={open} onClose={onClose} title={`Why ${career.careerTitle}?`} size="md">
+      <div className="space-y-4">
+        <p className="text-sm text-secondary">{career.description}</p>
+
+        {drivers.length > 0 && (
+          <div>
+            <p className="text-xs font-semibold text-muted uppercase tracking-wide mb-3">Top Feature Drivers</p>
+            <div className="space-y-3">
+              {drivers.map((d, i) => {
+                const pct = Math.round((Math.abs(d.impact) / maxImpact) * 100);
+                const isPos = d.direction !== 'negative';
+                return (
+                  <div key={i}>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-secondary capitalize">{d.feature?.replace(/_/g, ' ')}</span>
+                      <span className={clsx('font-semibold', isPos ? 'text-emerald-400' : 'text-red-400')}>
+                        {isPos ? '+' : '-'}{Math.abs(Math.round(d.impact * 1000)) / 10}%
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">
+                      <div
+                        className={clsx('h-full rounded-full', isPos ? 'bg-emerald-500' : 'bg-red-500')}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center gap-3 p-3 bg-border/30 rounded-xl">
+          <BarChart2 className="w-4 h-4 text-indigo-400 shrink-0" />
+          <div className="text-xs text-secondary">
+            Match confidence: <span className="font-semibold text-primary">{career.matchScore}%</span>
+            {career.confidenceTier && (
+              <> · <ConfidenceTierBadge tier={career.confidenceTier} /></>
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 const visibilityConfig = {
   private: { icon: Lock,   label: 'Private',  badge: 'default' },
   shared:  { icon: Users,  label: 'Shared',   badge: 'indigo'  },
@@ -34,6 +163,7 @@ export default function ReportPage() {
   const [shareOpen,  setShareOpen]  = useState(false);
   const [annotOpen,  setAnnotOpen]  = useState(false);
   const [annotText,  setAnnotText]  = useState('');
+  const [whyCareer,  setWhyCareer]  = useState(null);
 
   const { data: report, isLoading } = useQuery({
     queryKey: ['report', id],
@@ -202,6 +332,7 @@ export default function ReportPage() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold text-primary">{career.careerTitle}</h3>
                       {i === 0 && <Badge variant="indigo">Best Match</Badge>}
+                      {career.confidenceTier && <ConfidenceTierBadge tier={career.confidenceTier} />}
                     </div>
                     <p className="text-xs text-muted mt-0.5">{career.category}</p>
                     {career.description && (
@@ -214,23 +345,35 @@ export default function ReportPage() {
                         ))}
                       </div>
                     )}
+                    <ModelAgreementBar agreement={career.modelAgreement} />
+                    <SpecializedPaths roles={career.recommendedRoles} />
                   </div>
                 </div>
 
-                <div className="text-right shrink-0">
-                  <span className={clsx('text-2xl font-display font-bold', matchColor(career.matchScore))}>
-                    {career.matchScore}%
-                  </span>
-                  <p className="text-xs text-muted">match</p>
+                <div className="text-right shrink-0 space-y-2">
+                  <div>
+                    <span className={clsx('text-2xl font-display font-bold', matchColor(career.matchScore))}>
+                      {career.matchScore}%
+                    </span>
+                    <p className="text-xs text-muted">match</p>
+                  </div>
                   {career.salaryRange?.min && (
-                    <p className="text-xs text-secondary mt-1">
+                    <p className="text-xs text-secondary">
                       ${(career.salaryRange.min/1000).toFixed(0)}k–${(career.salaryRange.max/1000).toFixed(0)}k
                     </p>
+                  )}
+                  {career.topDrivers?.length > 0 && (
+                    <button
+                      onClick={() => setWhyCareer(career)}
+                      className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors mt-1"
+                    >
+                      <Lightbulb className="w-3 h-3" />
+                      Why this?
+                    </button>
                   )}
                 </div>
               </div>
 
-              {/* Match score bar */}
               <div className="mt-4">
                 <MatchScoreBar score={career.matchScore} label="Match strength" />
               </div>
@@ -310,6 +453,9 @@ export default function ReportPage() {
           </div>
         </motion.div>
       )}
+
+      {/* ── Why This Match Modal ───────────────────────────────── */}
+      <WhyMatchModal open={!!whyCareer} onClose={() => setWhyCareer(null)} career={whyCareer} />
 
       {/* ── Modals ─────────────────────────────────────────────── */}
       <Modal open={shareOpen} onClose={() => setShareOpen(false)} title="Share Report" size="md">

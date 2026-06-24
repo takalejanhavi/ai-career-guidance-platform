@@ -37,7 +37,7 @@ const envSchema = z.object({
   BLOCKCHAIN_RPC_URL:     z.string().url().optional(),
   BLOCKCHAIN_PRIVATE_KEY: z.string().optional(),
   CONTRACT_ADDRESS:       z.string().optional(),
-  BLOCKCHAIN_NETWORK:     z.string().default('polygon-mumbai'),
+  BLOCKCHAIN_NETWORK:     z.string().default('polygon-amoy'),
 
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
   RATE_LIMIT_MAX:       z.coerce.number().default(100),

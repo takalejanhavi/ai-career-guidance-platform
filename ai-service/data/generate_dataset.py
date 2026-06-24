@@ -440,7 +440,7 @@ def generate_dataset(n_total: int = 10_000, save_path: str | None = None) -> pd.
         for career, n in zip(CAREERS, counts)
     ]
     df = pd.concat(blocks, ignore_index=True)
-    #df = _add_outliers(df)
+    df = _add_outliers(df)
     df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
     # Round feature scores to 1 decimal place
@@ -449,7 +449,7 @@ def generate_dataset(n_total: int = 10_000, save_path: str | None = None) -> pd.
     if save_path:
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(save_path, index=False)
-        print(f"Dataset saved → {save_path}  ({len(df):,} rows)")
+        print(f"Dataset saved -> {save_path}  ({len(df):,} rows)")
 
     return df
 

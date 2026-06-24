@@ -21,6 +21,7 @@
  */
 
 // ── AI service raw feature order (must match RAW_FEATURES in predict.py) ───
+// 18 features: 3 academic + 7 personality + 8 career interests
 const AI_RAW_FEATURES = [
   'math_score',
   'science_score',
@@ -32,6 +33,14 @@ const AI_RAW_FEATURES = [
   'extroversion',
   'conscientiousness',
   'extracurricular',
+  'coding_interest',
+  'biology_interest',
+  'business_interest',
+  'design_interest',
+  'teaching_interest',
+  'research_interest',
+  'people_helping_interest',
+  'entrepreneurship_interest',
 ];
 
 // ── Question -> AI feature mapping ──────────────────────────────────────────
@@ -43,70 +52,81 @@ const AI_RAW_FEATURES = [
 // question_bank.json (see docs/ai-integration-mapping.md Table 1).
 const QUESTION_FEATURE_MAP = {
   // ── Aptitude (5 questions) ────────────────────────────────────────────────
-  apt_001: ['math_score', 'analytical_thinking'],          // "solve complex mathematical problems"
-  apt_002: ['analytical_thinking', 'science_score'],       // "analyzing data to find patterns"
-  apt_003: ['english_score'],                              // "communicate complex ideas clearly in writing"
-  apt_004: ['analytical_thinking'],                        // "pick up new technical skills quickly"
-  apt_005: ['math_score', 'science_score'],                // "spatial relationships"
+  apt_001: ['math_score', 'analytical_thinking'],
+  apt_002: ['analytical_thinking', 'science_score', 'research_interest'],
+  apt_003: ['english_score'],
+  apt_004: ['analytical_thinking', 'coding_interest'],
+  apt_005: ['math_score', 'science_score'],
 
   // ── Interest (7 questions) ─────────────────────────────────────────────────
-  int_001: ['analytical_thinking'],                        // "computers and technology"
-  int_002: ['communication'],                              // "helping others solve problems"
-  int_003: ['science_score'],                              // "how living organisms work"
-  int_004: ['creativity'],                                 // "creating art or music"
-  int_005: ['english_score'],                              // "societies and economies"
-  int_006: ['extracurricular'],                            // "building or fixing physical objects"
-  int_007: ['leadership', 'creativity'],                   // "business and entrepreneurship"
+  int_001: ['analytical_thinking', 'coding_interest'],
+  int_002: ['communication', 'people_helping_interest', 'teaching_interest'],
+  int_003: ['science_score', 'biology_interest'],
+  int_004: ['creativity', 'design_interest'],
+  int_005: ['english_score', 'business_interest'],
+  int_006: ['extracurricular'],
+  int_007: ['leadership', 'business_interest', 'entrepreneurship_interest'],
 
   // ── Personality (6 questions) ──────────────────────────────────────────────
-  per_001: ['extroversion'],                               // "working in teams"
-  per_002: ['conscientiousness'],                          // "calm under deadline pressure"
-  per_003: ['leadership'],                                 // "taking initiative"
-  per_004: ['conscientiousness'],                          // "structured routines"
-  per_005: ['extroversion', 'communication'],              // "presenting to large groups"
-  per_006: ['conscientiousness'],                          // "attention to small details"
+  per_001: ['extroversion'],
+  per_002: ['conscientiousness'],
+  per_003: ['leadership'],
+  per_004: ['conscientiousness'],
+  per_005: ['extroversion', 'communication'],
+  per_006: ['conscientiousness'],
 
   // ── Values (6 questions) ───────────────────────────────────────────────────
-  val_001: ['conscientiousness'],                          // "job security and stability"
-  val_002: ['communication'],                              // "positive impact on society"
-  val_003: ['leadership'],                                 // "financial reward primary motivation"
-  val_004: ['extracurricular'],                            // "work-life balance"
-  val_005: ['analytical_thinking'],                        // "continuous learning"
-  val_006: ['leadership', 'extroversion'],                 // "recognition and status"
+  val_001: ['conscientiousness'],
+  val_002: ['communication', 'people_helping_interest'],
+  val_003: ['leadership', 'entrepreneurship_interest'],
+  val_004: ['extracurricular'],
+  val_005: ['analytical_thinking', 'research_interest'],
+  val_006: ['leadership', 'extroversion'],
 
   // ── Learning Style (5 questions) ───────────────────────────────────────────
-  ls_001: ['extracurricular'],                             // "hands-on tasks"
-  ls_002: ['english_score'],                               // "reading and studying alone"
-  ls_003: ['creativity'],                                  // "diagrams and visual aids"
-  ls_004: ['communication', 'extroversion'],               // "discussion and debate"
-  ls_005: ['conscientiousness'],                           // "structured step-by-step instructions"
+  ls_001: ['extracurricular'],
+  ls_002: ['english_score', 'research_interest'],
+  ls_003: ['creativity', 'design_interest'],
+  ls_004: ['communication', 'extroversion', 'teaching_interest'],
+  ls_005: ['conscientiousness'],
 };
 
 // ── Section -> AI feature fallback map ──────────────────────────────────────
-// Used only if a question ID is not present in QUESTION_FEATURE_MAP
-// (defensive — keeps the pipeline working if the question bank changes).
+// Used only if a question ID is not present in QUESTION_FEATURE_MAP.
 const SECTION_FEATURE_MAP = {
-  aptitude:       ['math_score', 'science_score', 'analytical_thinking'],
-  interest:       ['english_score', 'creativity'],
+  aptitude:       ['math_score', 'science_score', 'analytical_thinking', 'research_interest'],
+  interest:       ['english_score', 'creativity', 'coding_interest', 'biology_interest',
+                   'business_interest', 'design_interest', 'teaching_interest',
+                   'people_helping_interest', 'entrepreneurship_interest'],
   personality:    ['communication', 'extroversion', 'conscientiousness'],
-  values:         ['leadership', 'conscientiousness'],
-  learning_style: ['extracurricular'],
+  values:         ['leadership', 'conscientiousness', 'entrepreneurship_interest'],
+  learning_style: ['extracurricular', 'research_interest'],
 };
 
 // ── Reverse mapping: AI feature -> assessment dimension ─────────────────────
 // Used to build report.careerRecommendations[].dimensionWeights from
 // top_drivers[] returned by /predict/explain.
 const FEATURE_TO_DIMENSION = {
-  math_score:          'aptitude',
-  science_score:       'aptitude',
-  english_score:       'interest',
-  communication:       'personality',
-  leadership:          'values',
-  creativity:          'interest',
-  analytical_thinking: 'aptitude',
-  extroversion:        'personality',
-  conscientiousness:   'values',
-  extracurricular:     'learningStyle',
+  // Original 10
+  math_score:                  'aptitude',
+  science_score:               'aptitude',
+  english_score:               'interest',
+  communication:               'personality',
+  leadership:                  'values',
+  creativity:                  'interest',
+  analytical_thinking:         'aptitude',
+  extroversion:                'personality',
+  conscientiousness:           'values',
+  extracurricular:             'learningStyle',
+  // 8 interest features (v1.1.0)
+  coding_interest:             'interest',
+  biology_interest:            'interest',
+  business_interest:           'values',
+  design_interest:             'interest',
+  teaching_interest:           'interest',
+  research_interest:           'aptitude',
+  people_helping_interest:     'interest',
+  entrepreneurship_interest:   'values',
 };
 
 // ── Engineered feature -> dimension map ─────────────────────────────────────
@@ -118,25 +138,47 @@ const FEATURE_TO_DIMENSION = {
 // intentionally omitted; their impact is dropped from dimensionWeights
 // rather than misattributed.
 const ENGINEERED_FEATURE_TO_DIMENSION = {
-  academic_overall:           'aptitude',
-  stem_aptitude:              'aptitude',
-  research_aptitude:          'aptitude',
-  interact_quant_reasoning:   'aptitude',
-  interact_scientific_rigour: 'aptitude',
-  humanities_aptitude:        'interest',
-  creative_index:             'interest',
-  interact_creative_comm:     'interest',
-  social_aptitude:            'personality',
-  personality_profile:        'personality',
-  leadership_potential:       'values',
-  work_ethic:                 'values',
-  interact_leadership_expr:   'values',
-  stem_vs_social_ratio:       'aptitude',
-  // Omitted (no single dimension owner): score_variance, personality_extremity
+  // Composite academic
+  academic_overall:               'aptitude',
+  stem_aptitude:                  'aptitude',
+  research_aptitude:              'aptitude',
+  interact_quant_reasoning:       'aptitude',
+  interact_scientific_rigour:     'aptitude',
+  stem_vs_social_ratio:           'aptitude',
+  // Composite personality / social
+  humanities_aptitude:            'interest',
+  creative_index:                 'interest',
+  interact_creative_comm:         'interest',
+  social_aptitude:                'personality',
+  personality_profile:            'personality',
+  leadership_potential:           'values',
+  work_ethic:                     'values',
+  interact_leadership_expr:       'values',
+  // Career orientation composites (v1.1.0)
+  technical_orientation:          'aptitude',
+  healthcare_orientation:         'aptitude',
+  business_orientation:           'values',
+  creative_orientation:           'interest',
+  education_orientation:          'interest',
+  research_orientation:           'aptitude',
+  // New interest-based interactions (v1.1.0)
+  interact_coding_analytical:     'aptitude',
+  interact_biology_science:       'aptitude',
+  interact_design_creativity:     'interest',
+  interact_business_leadership:   'values',
+  interact_teaching_helping:      'interest',
+  // Omitted (cross-cutting): score_variance, personality_extremity
 };
 
 // ── AI confidence_tier -> report matchLabel ─────────────────────────────────
+// Supports both new tier names (HIGH/MEDIUM/EMERGING/LOW) and old names for
+// backward compatibility with reports scored before the v1.1.0 upgrade.
 const CONFIDENCE_TIER_TO_LABEL = {
+  'HIGH':      'excellent',
+  'MEDIUM':    'good',
+  'EMERGING':  'fair',
+  'LOW':       'fair',
+  // legacy v1.0.x names
   'Very High': 'excellent',
   'High':      'excellent',
   'Moderate':  'good',
@@ -154,11 +196,11 @@ const CAREER_CATEGORY_MAP = {
   'Entrepreneur':           'Business & Finance',
   'Marketing Manager':      'Business & Marketing',
   'Graphic Designer':       'Creative & Design',
-  'Teacher':                'Education',
-  'Nurse':                  'Healthcare & Science',
-  'Lawyer':                 'Law & Public Policy',
-  'Architect':              'Engineering',
+  'Content Writer':         'Creative & Media',
+  'Architect':              'Engineering & Design',
+  'Medical Doctor':         'Healthcare & Science',
   'Psychologist':           'Healthcare & Science',
+  'Teacher / Educator':     'Education',
 };
 
 // ── Score -> tier (matches ScoresSchema enum: low/moderate/high/very_high) ──
@@ -224,16 +266,24 @@ function buildNarrative({ firstName, topCareer, confidenceSummary, dimensionScor
 
 function _humanizeFeature(feature) {
   const labels = {
-    math_score:          'mathematical aptitude',
-    science_score:       'scientific reasoning',
-    english_score:       'communication skills',
-    communication:       'interpersonal communication',
-    leadership:          'leadership qualities',
-    creativity:          'creative thinking',
-    analytical_thinking: 'analytical thinking',
-    extroversion:        'social engagement',
-    conscientiousness:   'conscientiousness',
-    extracurricular:     'practical, hands-on skills',
+    math_score:               'mathematical aptitude',
+    science_score:            'scientific reasoning',
+    english_score:            'language & communication skills',
+    communication:            'interpersonal communication',
+    leadership:               'leadership qualities',
+    creativity:               'creative thinking',
+    analytical_thinking:      'analytical thinking',
+    extroversion:             'social engagement',
+    conscientiousness:        'conscientiousness',
+    extracurricular:          'practical, hands-on skills',
+    coding_interest:          'interest in coding & technology',
+    biology_interest:         'interest in biology & life sciences',
+    business_interest:        'interest in business',
+    design_interest:          'interest in design & visual arts',
+    teaching_interest:        'interest in teaching & education',
+    research_interest:        'interest in research & discovery',
+    people_helping_interest:  'interest in helping people',
+    entrepreneurship_interest:'entrepreneurial drive',
   };
   return labels[feature] || feature.replace(/_/g, ' ');
 }

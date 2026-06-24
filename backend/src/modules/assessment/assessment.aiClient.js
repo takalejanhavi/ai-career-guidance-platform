@@ -68,20 +68,23 @@ const careerMatchSchema = z.object({
   rank:            z.number().int().positive(),
   career:          z.string().min(1),
   confidence_pct:  z.number().min(0).max(100),
-  confidence_tier: z.enum(['Very High', 'High', 'Moderate', 'Low']),
+  // Accept both v1.1.0 tier names (HIGH/MEDIUM/EMERGING/LOW) and legacy
+  // names (Very High/High/Moderate/Low) for backward compatibility.
+  confidence_tier: z.enum(['HIGH', 'MEDIUM', 'EMERGING', 'LOW', 'Very High', 'High', 'Moderate', 'Low']),
+  rf_confidence:   z.number().optional(),
+  xgb_confidence:  z.number().optional(),
   model_agreement: z.number(),
   description:     z.string(),
   key_traits:      z.array(z.string()),
   growth_outlook:  z.string(),
-  // /predict/explain returns salary_range as { min, max, currency },
-  // not the tuple shape used internally by predict.py's dataclass.
   salary_range:    z.object({
     min:      z.number(),
     max:      z.number(),
     currency: z.string().default('USD'),
   }),
+  recommended_roles: z.array(z.string()).optional().default([]),
   top_drivers:     z.array(z.object({
-    feature:   z.string(),  // raw feature OR engineered feature name
+    feature:   z.string(),
     impact:    z.number(),
     direction: z.string().optional(),
   })).optional().default([]),
@@ -273,30 +276,40 @@ function mapToScores(responses) {
  * @returns {object[]}
  */
 function mapToRecommendations(topCareers) {
-  return topCareers.map((c) => ({
-    rank:        c.rank,
-    careerSlug:  _slugify(c.career),
-    careerTitle: c.career,
-    category:    CAREER_CATEGORY_MAP[c.career] || 'General',
-    matchScore:  Math.round(c.confidence_pct),
-    matchLabel:  CONFIDENCE_TIER_TO_LABEL[c.confidence_tier] || 'fair',
-    description: c.description,
-    keySkills:   c.key_traits,
-    growthOutlook: _normalizeGrowth(c.growth_outlook),
-    salaryRange: {
-      min: c.salary_range.min,
-      max: c.salary_range.max,
-      currency: c.salary_range.currency || 'USD',
-    },
-    dimensionWeights: _aggregateDimensionWeights(c.top_drivers),
-    // /predict/explain does not return per-career rf_confidence/xgb_confidence
-    // (those exist only in the internal CareerMatch dataclass, not the JSON
-    // response). model_agreement (0-1, where 1 = full agreement) is used to
-    // derive a spread around confidence_pct as a reasonable approximation
-    // for the PDF's "RF score / XGB score" comparison bars.
-    rfScore:  Math.round(c.confidence_pct * (1 + (1 - c.model_agreement) * 0.05)),
-    xgbScore: Math.round(c.confidence_pct * (1 - (1 - c.model_agreement) * 0.05)),
-  }));
+  return topCareers.map((c) => {
+    // Use actual per-model scores when present (v1.1.0+); fall back to a
+    // model_agreement-based approximation for older AI service responses.
+    const rfScore  = c.rf_confidence != null
+      ? Math.round(c.rf_confidence * 100)
+      : Math.round(c.confidence_pct * (1 + (1 - c.model_agreement) * 0.05));
+    const xgbScore = c.xgb_confidence != null
+      ? Math.round(c.xgb_confidence * 100)
+      : Math.round(c.confidence_pct * (1 - (1 - c.model_agreement) * 0.05));
+
+    return {
+      rank:             c.rank,
+      careerSlug:       _slugify(c.career),
+      careerTitle:      c.career,
+      category:         CAREER_CATEGORY_MAP[c.career] || 'General',
+      matchScore:       Math.round(c.confidence_pct),
+      matchLabel:       CONFIDENCE_TIER_TO_LABEL[c.confidence_tier] || 'fair',
+      confidenceTier:   c.confidence_tier,
+      modelAgreement:   Number(c.model_agreement.toFixed(4)),
+      description:      c.description,
+      keySkills:        c.key_traits,
+      growthOutlook:    _normalizeGrowth(c.growth_outlook),
+      salaryRange: {
+        min:      c.salary_range.min,
+        max:      c.salary_range.max,
+        currency: c.salary_range.currency || 'USD',
+      },
+      recommendedRoles: c.recommended_roles || [],
+      topDrivers:       c.top_drivers || [],
+      dimensionWeights: _aggregateDimensionWeights(c.top_drivers),
+      rfScore,
+      xgbScore,
+    };
+  });
 }
 
 /**

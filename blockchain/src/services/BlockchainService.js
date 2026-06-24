@@ -5,22 +5,33 @@ const fs         = require('fs');
 const path       = require('path');
 const helpers    = require('../utils/contractHelpers');
 
-// Load ABI
-const ABI_PATH = path.join(__dirname, '../../artifacts/contracts/CareerReport.sol/CareerReport.abi.json');
+// CHANGED: was 'CareerReport.abi.json' — Hardhat compile emits a single
+//          CareerReport.json artifact (format: hh-sol-artifact-1) containing
+//          abi, bytecode, deployedBytecode, etc.  Separate .abi.json / .bin
+//          files are a Truffle/Foundry convention — Hardhat never writes them.
+//          The abi array is extracted at connect() time from artifact.abi.
+const ARTIFACT_PATH = path.join(
+  __dirname,
+  '../../artifacts/contracts/CareerReport.sol/CareerReport.json'
+);
 
 /**
  * BlockchainService
  * ==================
- * Full Node.js integration layer for the CareerReport smart contract.
+ * Integration layer for the CareerReport v2 smart contract.
  *
- * Supports two modes:
- *   read-only  : provider only (for verify/query operations)
- *   read-write : provider + signer (for register/grant/revoke)
+ * Contract v2 on-chain responsibilities (sole source of truth for integrity):
+ *   registerReport(reportId, pdfHash)    — anchor proof of existence + hash
+ *   updateReportHash(reportId, newHash)  — update hash after PDF regeneration
+ *   verifyIntegrity(reportId, pdfHash)   — public integrity verification (view)
+ *   getReport(reportId)                  — fetch { pdfHash, owner, timestamp }
+ *   reportExists(reportId)               — existence probe (view)
  *
- * Usage:
- *   const svc = new BlockchainService({ rpcUrl, privateKey, contractAddress });
- *   await svc.connect();
- *   const result = await svc.registerReport({ reportId, pdfHash, studentId });
+ * Moved to MongoDB in v2 (access via backend Node service):
+ *   Access control  — grantAccess, revokeAccess, hasAccess → reports.permissions
+ *   Revocation      — blockchain.status = 'revoked' in reports collection
+ *   Owner lists     — db.reports.find({ userId })
+ *   Metadata URIs, student IDs, block numbers, annotation grants
  */
 class BlockchainService {
 
@@ -29,7 +40,7 @@ class BlockchainService {
     privateKey       = null,
     contractAddress,
     confirmations    = 1,
-    gasLimitBuffer   = 20,    // percent buffer on gas estimates
+    gasLimitBuffer   = 20,
     timeoutMs        = 60_000,
   } = {}) {
     if (!rpcUrl)          throw new Error('rpcUrl is required');
@@ -49,30 +60,29 @@ class BlockchainService {
   async connect() {
     if (this._connected) return this;
 
-    // Load ABI
-    if (!fs.existsSync(ABI_PATH)) {
+    // CHANGED: load the full Hardhat artifact JSON then extract .abi.
+    //          Previously loaded CareerReport.abi.json (file that does not exist).
+    if (!fs.existsSync(ARTIFACT_PATH)) {
       throw new Error(
-        `ABI not found at ${ABI_PATH}. Run 'npm run compile' first.`
+        `Compiled artifact not found at ${ARTIFACT_PATH}. Run 'npx hardhat compile' first.`
       );
     }
-    this.abi = JSON.parse(fs.readFileSync(ABI_PATH, 'utf8'));
+    const artifact = JSON.parse(fs.readFileSync(ARTIFACT_PATH, 'utf8')); // CHANGED: parse full artifact
+    this.abi       = artifact.abi;                                        // CHANGED: extract abi array
 
-    // Provider
     this.provider = new ethers.JsonRpcProvider(this.rpcUrl);
 
-    // Test connection
     const network = await this.provider.getNetwork().catch(e => {
       throw new Error(`Failed to connect to ${this.rpcUrl}: ${e.message}`);
     });
     this.chainId = network.chainId;
 
-    // Signer (optional — read-only mode without private key)
     if (this.privateKey) {
-      this.signer   = new ethers.Wallet(this.privateKey, this.provider);
-      this.contract = new ethers.Contract(this.contractAddress, this.abi, this.signer);
+      this.signer        = new ethers.Wallet(this.privateKey, this.provider);
+      this.contract      = new ethers.Contract(this.contractAddress, this.abi, this.signer);
       this.signerAddress = await this.signer.getAddress();
     } else {
-      this.contract = new ethers.Contract(this.contractAddress, this.abi, this.provider);
+      this.contract      = new ethers.Contract(this.contractAddress, this.abi, this.provider);
       this.signerAddress = null;
     }
 
@@ -102,7 +112,10 @@ class BlockchainService {
     const receipt = await Promise.race([
       tx.wait(this.confirmations),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Tx ${tx.hash} timed out after ${this.timeoutMs}ms`)), this.timeoutMs)
+        setTimeout(
+          () => reject(new Error(`Tx ${tx.hash} timed out after ${this.timeoutMs}ms`)),
+          this.timeoutMs
+        )
       ),
     ]);
     return receipt;
@@ -111,32 +124,32 @@ class BlockchainService {
   // ── Report operations ─────────────────────────────────────────
 
   /**
-   * Register a new career report hash on-chain.
+   * Anchor a report hash on-chain.
    *
    * @param {object} params
-   * @param {string} params.reportId    Off-chain report UUID or bytes32
-   * @param {string} params.pdfHash     SHA-256 hex hash of PDF (64 chars or 0x+64)
-   * @param {string} params.studentId   Off-chain student ID (will be hashed for privacy)
-   * @param {string} [params.metadataURI]  Optional IPFS / URL
-   * @returns {object}  { txHash, blockNumber, reportId, pdfHash, gasUsed }
+   * @param {string} params.reportId      MongoDB ObjectId / UUID — hashed to bytes32 on-chain
+   * @param {string} params.pdfHash       SHA-256 hex hash of PDF (64 chars or 0x+64)
+   * @param {string} [params.studentId]   Accepted for API backward-compat; NOT stored on-chain in v2
+   * @param {string} [params.metadataURI] Accepted for API backward-compat; NOT stored on-chain in v2
+   * @returns {{ txHash, blockNumber, gasUsed, reportId, pdfHash, status, network }}
    */
-  async registerReport({ reportId, pdfHash, studentId, metadataURI = '' }) {
+  async registerReport({ reportId, pdfHash, studentId, metadataURI }) { // CHANGED: studentId/metadataURI kept in signature for backward compat
     this._requireSigner();
 
-    const reportIdBytes32  = reportId.startsWith('0x') && reportId.length === 66
+    const reportIdBytes32 = reportId.startsWith('0x') && reportId.length === 66
       ? reportId
       : helpers.encodeReportId(reportId);
-    const pdfHashBytes32   = helpers.encodeHash(pdfHash);
-    const studentIdBytes32 = helpers.encodeStudentId(studentId);
+    const pdfHashBytes32  = helpers.encodeHash(pdfHash);
+    // CHANGED: studentId and metadataURI are no longer passed to the contract.
+    //          v2 registerReport(bytes32 reportId, bytes32 pdfHash) — 2 args only.
+    //          Store studentId / metadataURI in MongoDB (reports collection).
 
     const opts = await this._txOptions(
       this.contract.registerReport.estimateGas.bind(this.contract),
-      [reportIdBytes32, pdfHashBytes32, studentIdBytes32, metadataURI]
+      [reportIdBytes32, pdfHashBytes32]                                  // CHANGED: was 4 args
     );
 
-    const tx = await this.contract.registerReport(
-      reportIdBytes32, pdfHashBytes32, studentIdBytes32, metadataURI, opts
-    );
+    const tx      = await this.contract.registerReport(reportIdBytes32, pdfHashBytes32, opts); // CHANGED: was 4 args
     const receipt = await this._waitTx(tx);
 
     return {
@@ -151,10 +164,8 @@ class BlockchainService {
   }
 
   /**
-   * Update the hash of an existing report.
-   *
-   * @param {string} reportId     Report UUID or bytes32
-   * @param {string} newPdfHash   New SHA-256 hash
+   * Update the stored hash after a PDF is regenerated.
+   * Only the original registrant (msg.sender) can call this.
    */
   async updateReportHash(reportId, newPdfHash) {
     this._requireSigner();
@@ -162,7 +173,7 @@ class BlockchainService {
     const reportIdBytes32 = this._toReportId(reportId);
     const hashBytes32     = helpers.encodeHash(newPdfHash);
 
-    const opts = await this._txOptions(
+    const opts    = await this._txOptions(
       this.contract.updateReportHash.estimateGas.bind(this.contract),
       [reportIdBytes32, hashBytes32]
     );
@@ -178,102 +189,67 @@ class BlockchainService {
     };
   }
 
-  /**
-   * Revoke a report on-chain.
-   */
-  async revokeReport(reportId) {
-    this._requireSigner();
-    const id      = this._toReportId(reportId);
-    const opts    = await this._txOptions(this.contract.revokeReport.estimateGas.bind(this.contract), [id]);
-    const tx      = await this.contract.revokeReport(id, opts);
-    const receipt = await this._waitTx(tx);
-    return { txHash: receipt.hash, blockNumber: receipt.blockNumber, status: receipt.status === 1 ? 'confirmed' : 'failed' };
-  }
-
-  // ── Access control ────────────────────────────────────────────
-
-  /**
-   * Grant access to a report for a grantee address.
-   *
-   * @param {object} params
-   * @param {string}   params.reportId     Report UUID or bytes32
-   * @param {string}   params.grantee      Ethereum address of grantee
-   * @param {string[]} params.permissions  e.g. ['view','download']
-   * @param {Date|null} [params.expiresAt] Expiry date (null = never)
-   */
-  async grantAccess({ reportId, grantee, permissions = ['view'], expiresAt = null }) {
-    this._requireSigner();
-
-    const id      = this._toReportId(reportId);
-    const permBit = helpers.PERMISSIONS.fromArray(permissions);
-    const expiry  = expiresAt ? BigInt(Math.floor(new Date(expiresAt).getTime() / 1000)) : 0n;
-
-    const opts    = await this._txOptions(
-      this.contract.grantAccess.estimateGas.bind(this.contract),
-      [id, grantee, permBit, expiry]
+  // CHANGED: revokeReport removed from contract v2 — on-chain revocation costs gas
+  //          on every state change and the isRevoked flag adds a storage slot.
+  //          Revocation is now a MongoDB-only operation:
+  //            db.reports.updateOne({ _id }, { $set: { 'blockchain.status': 'revoked' } })
+  async revokeReport() {
+    throw new Error(
+      '[BlockchainService] revokeReport: on-chain revocation removed in contract v2. ' +
+      'Set report.blockchain.status = "revoked" in MongoDB (reports collection) instead.'
     );
-
-    const tx      = await this.contract.grantAccess(id, grantee, permBit, expiry, opts);
-    const receipt = await this._waitTx(tx);
-
-    return {
-      txHash:      receipt.hash,
-      blockNumber: receipt.blockNumber,
-      gasUsed:     receipt.gasUsed.toString(),
-      status:      receipt.status === 1 ? 'confirmed' : 'failed',
-      permissions: helpers.PERMISSIONS.toArray(permBit),
-      grantee,
-      expiresAt:   expiresAt ? new Date(expiresAt).toISOString() : null,
-    };
   }
 
-  /**
-   * Revoke access for a grantee.
-   */
-  async revokeAccess(reportId, grantee) {
-    this._requireSigner();
-    const id      = this._toReportId(reportId);
-    const opts    = await this._txOptions(this.contract.revokeAccess.estimateGas.bind(this.contract), [id, grantee]);
-    const tx      = await this.contract.revokeAccess(id, grantee, opts);
-    const receipt = await this._waitTx(tx);
-    return { txHash: receipt.hash, blockNumber: receipt.blockNumber, status: receipt.status === 1 ? 'confirmed' : 'failed' };
+  // ── Access control stubs ──────────────────────────────────────
+  // CHANGED: all access control functions removed from contract v2.
+  //          They moved to MongoDB to eliminate the per-grant SSTORE gas cost
+  //          (~20k gas per grantee, ~42k gas for array pushes).
+  //          Use the backend permission service (reports.permissions in MongoDB).
+
+  async grantAccess() {
+    throw new Error(
+      '[BlockchainService] grantAccess removed in contract v2. ' +
+      'Manage access via reports.permissions in MongoDB (backend service).'
+    );
   }
 
-  /**
-   * Update permissions for an existing grant.
-   */
-  async updatePermissions(reportId, grantee, permissions) {
-    this._requireSigner();
-    const id      = this._toReportId(reportId);
-    const permBit = helpers.PERMISSIONS.fromArray(permissions);
-    const opts    = await this._txOptions(this.contract.updatePermissions.estimateGas.bind(this.contract), [id, grantee, permBit]);
-    const tx      = await this.contract.updatePermissions(id, grantee, permBit, opts);
-    const receipt = await this._waitTx(tx);
-    return { txHash: receipt.hash, status: receipt.status === 1 ? 'confirmed' : 'failed', permissions };
+  async revokeAccess() {
+    throw new Error(
+      '[BlockchainService] revokeAccess removed in contract v2. ' +
+      'Update reports.permissions in MongoDB instead.'
+    );
   }
 
-  /**
-   * Renew or extend a grant's expiry.
-   */
-  async renewAccess(reportId, grantee, expiresAt) {
-    this._requireSigner();
-    const id     = this._toReportId(reportId);
-    const expiry = expiresAt ? BigInt(Math.floor(new Date(expiresAt).getTime() / 1000)) : 0n;
-    const opts   = await this._txOptions(this.contract.renewAccess.estimateGas.bind(this.contract), [id, grantee, expiry]);
-    const tx     = await this.contract.renewAccess(id, grantee, expiry, opts);
-    const receipt = await this._waitTx(tx);
-    return { txHash: receipt.hash, status: receipt.status === 1 ? 'confirmed' : 'failed' };
+  async updatePermissions() {
+    throw new Error(
+      '[BlockchainService] updatePermissions removed in contract v2. ' +
+      'Update reports.permissions in MongoDB instead.'
+    );
+  }
+
+  async renewAccess() {
+    throw new Error(
+      '[BlockchainService] renewAccess removed in contract v2. ' +
+      'Update reports.permissions.expiresAt in MongoDB instead.'
+    );
+  }
+
+  async hasAccess() {
+    throw new Error(
+      '[BlockchainService] hasAccess removed in contract v2. ' +
+      'Query reports.permissions in MongoDB instead.'
+    );
   }
 
   // ── Verification ──────────────────────────────────────────────
 
   /**
    * Verify a PDF hash against the on-chain record.
-   * This is a read-only call — no gas required.
+   * Read-only — no gas required.
    *
-   * @param {string} reportId  Report UUID or bytes32
-   * @param {string} pdfHash   SHA-256 hash to verify
-   * @returns {{ valid, report, chain }}
+   * @param {string} reportId  MongoDB ObjectId / UUID or 0x bytes32
+   * @param {string} pdfHash   SHA-256 hex hash to verify
+   * @returns {{ valid, reportId, pdfHash, onChain, reason?, verifiedAt }}
    */
   async verifyIntegrity(reportId, pdfHash) {
     this._requireConnected();
@@ -294,35 +270,24 @@ class BlockchainService {
       verifiedAt: new Date().toISOString(),
     };
 
+    // CHANGED: removed reportData.isRevoked check — isRevoked was removed from v2 struct.
+    //          v2 verifyIntegrity returns false on two conditions only:
+    //            1. report never registered (owner == address(0))
+    //            2. stored pdfHash !== supplied pdfHash
     if (!valid && reportData) {
-      result.reason = reportData.isRevoked
-        ? 'Report has been revoked'
-        : 'Hash mismatch — document may have been tampered';
-    } else if (!reportData) {
+      result.reason = 'Hash mismatch — document may have been tampered';
+    } else if (!valid && !reportData) {
       result.reason = 'Report not found on-chain';
     }
 
     return result;
   }
 
-  /**
-   * Check if an address has a specific permission on a report.
-   *
-   * @param {string} reportId
-   * @param {string} grantee
-   * @param {string} [permission]  'view' | 'download' | 'annotate' (default: 'view')
-   */
-  async hasAccess(reportId, grantee, permission = 'view') {
-    this._requireConnected();
-    const id      = this._toReportId(reportId);
-    const permBit = helpers.PERMISSIONS.fromArray([permission]);
-    return this.contract.hasAccess(id, grantee, permBit);
-  }
-
   // ── Query ─────────────────────────────────────────────────────
 
   /**
-   * Fetch the full report record from the contract.
+   * Fetch the on-chain Report struct.
+   * v2: { pdfHash, owner, timestamp } — serialized to { pdfHash, owner, timestamp, date }
    */
   async getReport(reportId) {
     this._requireConnected();
@@ -332,44 +297,42 @@ class BlockchainService {
   }
 
   /**
-   * Fetch the access grant for a specific grantee.
+   * Check whether a report has been registered on-chain.
+   * @param {string} reportId  UUID or 0x bytes32
+   * @returns {boolean}
    */
-  async getGrant(reportId, grantee) {
+  async reportExists(reportId) { // CHANGED: new v2 method — exposes contract.reportExists()
     this._requireConnected();
-    const id    = this._toReportId(reportId);
-    const grant = await this.contract.getAccessGrant(id, grantee);
-    return helpers.serializeGrant(grant);
+    return this.contract.reportExists(this._toReportId(reportId));
   }
 
-  /**
-   * Get all grantees for a report with their grant details.
-   */
-  async getAllGrants(reportId) {
-    this._requireConnected();
-    const id       = this._toReportId(reportId);
-    const grantees = await this.contract.getGrantees(id);
+  // CHANGED: getGrant / getAllGrants / getOwnerReports removed from contract v2.
+  //          Use MongoDB instead (reports.permissions, reports collection queries).
 
-    const grants = await Promise.all(
-      grantees.map(async (addr) => {
-        const g = await this.contract.getAccessGrant(id, addr);
-        return { grantee: addr, ...helpers.serializeGrant(g) };
-      })
+  async getGrant() {
+    throw new Error(
+      '[BlockchainService] getGrant removed in contract v2. ' +
+      'Query reports.permissions in MongoDB instead.'
     );
-
-    return grants;
   }
 
-  /**
-   * Get all report IDs for an owner address.
-   */
-  async getOwnerReports(ownerAddress) {
-    this._requireConnected();
-    return this.contract.getOwnerReports(ownerAddress);
+  async getAllGrants() {
+    throw new Error(
+      '[BlockchainService] getAllGrants removed in contract v2. ' +
+      'Query reports.permissions array in MongoDB instead.'
+    );
   }
 
-  /**
-   * Get blockchain connection info.
-   */
+  async getOwnerReports() {
+    throw new Error(
+      '[BlockchainService] getOwnerReports removed in contract v2. ' +
+      '_ownerReports[] enumeration array was removed to save ~42k gas per registration. ' +
+      'Use db.reports.find({ userId }) in MongoDB instead.'
+    );
+  }
+
+  // ── Info ──────────────────────────────────────────────────────
+
   async getInfo() {
     this._requireConnected();
     const [blockNumber, gasPrice, balance] = await Promise.all([
@@ -394,58 +357,60 @@ class BlockchainService {
   // ── Event listeners ───────────────────────────────────────────
 
   /**
-   * Listen for ReportRegistered events.
-   * @param {Function} callback  (event) => void
+   * Subscribe to Registered events.
+   *
+   * CHANGED: event renamed from 'ReportRegistered' (v1) to 'Registered' (v2).
+   *          Args reduced from 7 (reportId, pdfHash, owner, studentId, timestamp,
+   *          blockNumber, event) to 4 (reportId, pdfHash, owner, timestamp, event).
+   *          studentId and blockNumber were removed from the event in v2.
+   *
+   * @param {Function} callback  ({ reportId, pdfHash, owner, timestamp, txHash, date }) => void
    */
   onReportRegistered(callback) {
     this._requireConnected();
-    this.contract.on('ReportRegistered', (reportId, pdfHash, owner, studentId, timestamp, blockNumber, event) => {
+    // CHANGED: 'ReportRegistered' → 'Registered' (v2 contract event name)
+    this.contract.on('Registered', (reportId, pdfHash, owner, timestamp, event) => { // CHANGED: 4 positional args (was 7)
       callback({
-        reportId, pdfHash, owner, studentId,
-        timestamp:   Number(timestamp),
-        blockNumber: Number(blockNumber),
-        txHash:      event.log.transactionHash,
-        date:        new Date(Number(timestamp) * 1000).toISOString(),
+        reportId,
+        pdfHash,
+        owner,          // CHANGED: no more studentId / blockNumber
+        timestamp: Number(timestamp),
+        txHash:    event.log.transactionHash,
+        date:      new Date(Number(timestamp) * 1000).toISOString(),
       });
     });
   }
 
-  /**
-   * Listen for AccessGranted events.
-   */
-  onAccessGranted(callback) {
-    this._requireConnected();
-    this.contract.on('AccessGranted', (reportId, grantedTo, grantedBy, permissions, expiresAt, timestamp, event) => {
-      callback({
-        reportId, grantedTo, grantedBy,
-        permissions:  helpers.PERMISSIONS.toArray(Number(permissions)),
-        expiresAt:    Number(expiresAt),
-        timestamp:    Number(timestamp),
-        txHash:       event.log.transactionHash,
-      });
-    });
+  // CHANGED: AccessGranted event removed from contract v2.
+  //          Subscribe to MongoDB change streams on the permissions collection instead.
+  onAccessGranted() {
+    throw new Error(
+      '[BlockchainService] onAccessGranted: AccessGranted event removed from contract v2. ' +
+      'Subscribe to MongoDB change streams on the reports.permissions path instead.'
+    );
   }
 
-  /**
-   * Remove all event listeners.
-   */
   removeAllListeners() {
     this._requireConnected();
     this.contract.removeAllListeners();
   }
 
-  // ── Admin ─────────────────────────────────────────────────────
+  // ── Admin stubs ───────────────────────────────────────────────
+
+  // CHANGED: pause / unpause removed from contract v2.
+  //          The pause mechanism added a storage slot and two functions (~30k gas overhead).
+  //          If registrations need to stop, deploy a new contract (zero-migration cost
+  //          since all business state is in MongoDB, not on-chain).
 
   async pause() {
-    this._requireSigner();
-    const tx = await this.contract.pause();
-    return this._waitTx(tx);
+    throw new Error(
+      '[BlockchainService] pause: contract v2 has no pause mechanism. ' +
+      'Deploy a new CareerReport contract to stop accepting new registrations.'
+    );
   }
 
   async unpause() {
-    this._requireSigner();
-    const tx = await this.contract.unpause();
-    return this._waitTx(tx);
+    throw new Error('[BlockchainService] unpause: contract v2 has no pause mechanism.');
   }
 
   // ── Internal ──────────────────────────────────────────────────

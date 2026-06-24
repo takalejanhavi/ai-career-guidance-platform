@@ -21,6 +21,10 @@ import time
 import warnings
 from pathlib import Path
 
+# Force UTF-8 stdout on Windows so Unicode characters in print() don't crash
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -75,14 +79,14 @@ XGB_GRID = {
 # ── Utility ────────────────────────────────────────────────────────
 def _timer(label: str, t0: float) -> None:
     elapsed = time.perf_counter() - t0
-    print(f"  ✓ {label:<45} {elapsed:6.1f}s")
+    print(f"  [ok] {label:<45} {elapsed:6.1f}s")
 
 
 def _print_cv_summary(cv_results: dict, model_name: str) -> None:
-    print(f"\n  {model_name} — 5-fold CV:")
+    print(f"\n  {model_name} -- 5-fold CV:")
     for metric in ["test_accuracy", "test_f1_weighted"]:
         scores = cv_results[metric]
-        print(f"    {metric:<22} {scores.mean():.4f} ± {scores.std():.4f}")
+        print(f"    {metric:<22} {scores.mean():.4f} +/- {scores.std():.4f}")
 
 
 # ── Main training function ─────────────────────────────────────────
@@ -127,7 +131,7 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     y_enc = le.fit_transform(y)
     classes = le.classes_
     n_classes = len(classes)
-    vprint(f"\n[2/7] Label encoding → {n_classes} career classes")
+    vprint(f"\n[2/7] Label encoding ->{n_classes} career classes")
     for i, c in enumerate(classes):
         vprint(f"       {i:>2}: {c}")
     _timer("Encoding", t0)
@@ -138,7 +142,7 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     fe = FeatureEngineer(scale=True)
     X_eng = fe.fit_transform(X)
     feat_names = fe.get_feature_names_out()
-    vprint(f"       {len(FEATURES)} raw → {X_eng.shape[1]} engineered features")
+    vprint(f"       {len(FEATURES)} raw ->{X_eng.shape[1]} engineered features")
     _timer("Feature engineering", t0)
 
     # ── 4. Train/test split (stratified) ─────────────────────────
@@ -307,6 +311,7 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
         "class_names":      MODEL_DIR / "class_names.json",
         "metrics":          MODEL_DIR / "metrics.json",
         "importance":       MODEL_DIR / "feature_importance.csv",
+        "version":          MODEL_DIR / "version.json",
     }
 
     joblib.dump(fe,      artefacts["feature_engineer"], compress=3)
@@ -319,6 +324,21 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     artefacts["metrics"].write_text(json.dumps(metrics, indent=2))
     importance_df.to_csv(artefacts["importance"], index=False)
 
+    from datetime import datetime, timezone
+    version_meta = {
+        "version":          "1.1.0",
+        "training_date":    datetime.now(timezone.utc).isoformat(),
+        "feature_count":    X_eng.shape[1],
+        "raw_feature_count": len(FEATURES),
+        "n_classes":        n_classes,
+        "ensemble_weights": {"rf": 0.45, "xgb": 0.55},
+        "accuracy":         metrics["ensemble"]["accuracy"],
+        "f1":               metrics["ensemble"]["f1_weighted"],
+        "log_loss":         metrics["ensemble"]["log_loss"],
+        "n_samples":        len(df),
+    }
+    artefacts["version"].write_text(json.dumps(version_meta, indent=2))
+
     _timer("Artefact serialisation", t0)
 
     total_time = time.perf_counter() - t_total
@@ -326,14 +346,15 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     vprint(f"  Training complete in {total_time:.1f}s")
     vprint(f"  Ensemble accuracy : {metrics['ensemble']['accuracy']:.4f}")
     vprint(f"  Ensemble F1       : {metrics['ensemble']['f1_weighted']:.4f}")
-    vprint(f"  Artefacts saved → {MODEL_DIR}")
+    vprint(f"  Artefacts saved ->{MODEL_DIR}")
     vprint(f"{'='*58}\n")
 
     return {
-        "metrics":   metrics,
-        "artefacts": {k: str(v) for k, v in artefacts.items()},
-        "classes":   list(classes),
-        "n_features": X_eng.shape[1],
+        "metrics":      metrics,
+        "artefacts":    {k: str(v) for k, v in artefacts.items()},
+        "classes":      list(classes),
+        "n_features":   X_eng.shape[1],
+        "version_meta": version_meta,
     }
 
 

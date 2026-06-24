@@ -3,6 +3,12 @@
 const mongoose = require('mongoose');
 const { Schema, model } = mongoose;
 
+const TopDriverSchema = new Schema({
+  feature:   { type: String, maxlength: 100 },
+  impact:    { type: Number },
+  direction: { type: String, enum: ['positive', 'negative'], default: 'positive' },
+}, { _id: false });
+
 const CareerRecSchema = new Schema({
   rank         : { type: Number, required: true, min: 1, max: 50 },
   careerSlug   : { type: String, required: true, maxlength: 100 },
@@ -10,6 +16,13 @@ const CareerRecSchema = new Schema({
   category     : { type: String, required: true, maxlength: 100 },
   matchScore   : { type: Number, required: true, min: 0, max: 100 },
   matchLabel   : { type: String, enum: ['poor','fair','good','excellent'], required: true },
+  // v1.1.0 additions
+  confidenceTier:   { type: String, enum: ['HIGH','MEDIUM','EMERGING','LOW','Very High','High','Moderate','Low'], default: null },
+  modelAgreement:   { type: Number, min: 0, max: 1, default: null },
+  rfScore:          { type: Number, min: 0, max: 100, default: null },
+  xgbScore:         { type: Number, min: 0, max: 100, default: null },
+  recommendedRoles: { type: [String], default: [] },
+  topDrivers:       { type: [TopDriverSchema], default: [] },
   description  : { type: String, maxlength: 2000, default: null },
   dimensionWeights: {
     aptitude: Number, interest: Number, personality: Number, values: Number, learningStyle: Number,

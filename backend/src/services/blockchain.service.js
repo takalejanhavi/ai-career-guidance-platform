@@ -151,10 +151,10 @@ async function anchorReport({ reportId, pdfHash, studentId, metadataURI = '' }) 
 
   const opts = await _gasOptions(
     _contract.registerReport.estimateGas.bind(_contract),
-    [reportIdBytes32, pdfHashBytes32, studentIdBytes32, metadataURI]
+    [reportIdBytes32, pdfHashBytes32]
   );
 
-  const tx      = await _contract.registerReport(reportIdBytes32, pdfHashBytes32, studentIdBytes32, metadataURI, opts);
+  const tx      = await _contract.registerReport(reportIdBytes32, pdfHashBytes32, opts);
   logger.info('[Blockchain] Broadcast txHash=%s', tx.hash);
 
   const receipt = await _waitReceipt(tx);
@@ -237,16 +237,12 @@ async function updateReportHash(reportId, newPdfHash) {
  * @param {string} reportId  MongoDB ObjectId
  */
 async function revokeOnChain(reportId) {
-  await _ensureConnected();
-  _requireSigner();
-
-  const reportIdBytes32 = encodeReportId(reportId);
-  const opts    = await _gasOptions(_contract.revokeReport.estimateGas.bind(_contract), [reportIdBytes32]);
-  const tx      = await _contract.revokeReport(reportIdBytes32, opts);
-  const receipt = await _waitReceipt(tx);
-
-  logger.info('[Blockchain] Revoked on-chain txHash=%s report=%s', receipt.hash, reportId);
-  return { txHash: receipt.hash, blockNumber: receipt.blockNumber, gasUsed: receipt.gasUsed.toString(), network: env.BLOCKCHAIN_NETWORK };
+  // revokeReport was removed from the contract in v2 to cut deployment gas.
+  // Revocation is now a MongoDB-only operation (report.blockchain.status = 'revoked').
+  throw new Error(
+    '[Blockchain] revokeOnChain: on-chain revocation removed in contract v2. ' +
+    'Set report.blockchain.status = "revoked" in MongoDB instead.'
+  );
 }
 
 /**
@@ -259,17 +255,13 @@ async function getOnChainRecord(reportId) {
   try {
     const raw = await _contract.getReport(encodeReportId(reportId));
     return {
-      pdfHash    : raw.pdfHash,
-      owner      : raw.owner,
-      studentId  : raw.studentId,
-      timestamp  : Number(raw.timestamp),
-      blockNumber: Number(raw.blockNumber),
-      metadataURI: raw.metadataURI,
-      isRevoked  : raw.isRevoked,
-      date       : new Date(Number(raw.timestamp) * 1000).toISOString(),
+      pdfHash  : raw.pdfHash,
+      owner    : raw.owner,
+      timestamp: Number(raw.timestamp),
+      date     : new Date(Number(raw.timestamp) * 1000).toISOString(),
     };
   } catch (err) {
-    if (err.errorName === 'ReportNotFound' || err.message?.includes('ReportNotFound')) return null;
+    if (err.errorName === 'NotFound' || err.message?.includes('NotFound')) return null;
     throw err;
   }
 }
@@ -296,28 +288,25 @@ async function healthCheck() {
   }
 }
 
-// ── Minimal embedded ABI (fallback) ────────────────────────────────────────
+// ── Minimal embedded ABI — matches CareerReport.sol v2 (2-slot struct) ────────
 
 const MINIMAL_ABI = [
   { name:'registerReport', type:'function', stateMutability:'nonpayable',
-    inputs:[{name:'reportId',type:'bytes32'},{name:'pdfHash',type:'bytes32'},{name:'studentId',type:'bytes32'},{name:'metadataURI',type:'string'}], outputs:[] },
+    inputs:[{name:'reportId',type:'bytes32'},{name:'pdfHash',type:'bytes32'}], outputs:[] },
   { name:'updateReportHash', type:'function', stateMutability:'nonpayable',
     inputs:[{name:'reportId',type:'bytes32'},{name:'newPdfHash',type:'bytes32'}], outputs:[] },
-  { name:'revokeReport', type:'function', stateMutability:'nonpayable',
-    inputs:[{name:'reportId',type:'bytes32'}], outputs:[] },
   { name:'verifyIntegrity', type:'function', stateMutability:'view',
     inputs:[{name:'reportId',type:'bytes32'},{name:'pdfHash',type:'bytes32'}], outputs:[{name:'valid',type:'bool'}] },
   { name:'getReport', type:'function', stateMutability:'view',
     inputs:[{name:'reportId',type:'bytes32'}],
     outputs:[{name:'',type:'tuple',components:[
-      {name:'pdfHash',type:'bytes32'},{name:'owner',type:'address'},{name:'studentId',type:'bytes32'},
-      {name:'timestamp',type:'uint256'},{name:'blockNumber',type:'uint256'},
-      {name:'metadataURI',type:'string'},{name:'isRevoked',type:'bool'}
+      {name:'pdfHash',type:'bytes32'},{name:'owner',type:'address'},{name:'timestamp',type:'uint96'}
     ]}] },
-  { name:'ReportRegistered', type:'event',
+  { name:'reportExists', type:'function', stateMutability:'view',
+    inputs:[{name:'reportId',type:'bytes32'}], outputs:[{name:'',type:'bool'}] },
+  { name:'Registered', type:'event',
     inputs:[{name:'reportId',type:'bytes32',indexed:true},{name:'pdfHash',type:'bytes32',indexed:true},
-            {name:'owner',type:'address',indexed:true},{name:'studentId',type:'bytes32',indexed:false},
-            {name:'timestamp',type:'uint256',indexed:false},{name:'blockNumber',type:'uint256',indexed:false}] },
+            {name:'owner',type:'address',indexed:true},{name:'timestamp',type:'uint256',indexed:false}] },
 ];
 
 module.exports = {

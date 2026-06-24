@@ -267,61 +267,11 @@ async function main() {
     assert.equal(result.valid, false);
   }, SKIP);
 
-  await test('grantAccess and hasAccess work correctly', async () => {
-    const provider   = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
-    const signers    = await provider.listAccounts();
-    const granteeAddr = signers[1];
-
-    const id   = randomId();
-    const hash = sha256hex('grant-test');
-    await service.registerReport({ reportId: id, pdfHash: hash, studentId: 'STU-004' });
-
-    await service.grantAccess({
-      reportId:    id,
-      grantee:     granteeAddr,
-      permissions: ['view','download'],
-      expiresAt:   null,
-    });
-
-    const viewResult     = await service.hasAccess(id, granteeAddr, 'view');
-    const downloadResult = await service.hasAccess(id, granteeAddr, 'download');
-    const annotateResult = await service.hasAccess(id, granteeAddr, 'annotate');
-
-    assert.equal(viewResult,     true,  'should have view');
-    assert.equal(downloadResult, true,  'should have download');
-    assert.equal(annotateResult, false, 'should not have annotate');
-  }, SKIP);
-
-  await test('revokeAccess removes access', async () => {
-    const provider    = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
-    const signers     = await provider.listAccounts();
-    const granteeAddr = signers[2];
-
-    const id   = randomId();
-    const hash = sha256hex('revoke-test');
-    await service.registerReport({ reportId: id, pdfHash: hash, studentId: 'STU-005' });
-    await service.grantAccess({ reportId: id, grantee: granteeAddr, permissions: ['view'] });
-
-    assert.equal(await service.hasAccess(id, granteeAddr, 'view'), true);
-    await service.revokeAccess(id, granteeAddr);
-    assert.equal(await service.hasAccess(id, granteeAddr, 'view'), false);
-  }, SKIP);
-
-  await test('getAllGrants returns all grantee records', async () => {
-    const provider   = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
-    const signers    = await provider.listAccounts();
-
-    const id   = randomId();
-    const hash = sha256hex('allgrants-test');
-    await service.registerReport({ reportId: id, pdfHash: hash, studentId: 'STU-006' });
-
-    await service.grantAccess({ reportId: id, grantee: signers[1], permissions: ['view'] });
-    await service.grantAccess({ reportId: id, grantee: signers[2], permissions: ['view', 'download'] });
-
-    const grants = await service.getAllGrants(id);
-    assert.equal(grants.length, 2);
-    assert.ok(grants.every(g => g.grantee && g.status));
-  }, SKIP);
+  // CHANGED: grantAccess / revokeAccess / getAllGrants tests removed.
+  //          Contract v2 has no on-chain access control — grantAccess, revokeAccess,
+  //          hasAccess, and getAllGrants were removed from the contract to cut deployment
+  //          gas from ~1.7M to ~300k. Access control now lives in MongoDB (backend).
+  //          These tests should be moved to backend/test/ against the Node service layer.
 
   await test('updateReportHash updates and re-verifies', async () => {
     const id    = randomId();
@@ -335,14 +285,11 @@ async function main() {
     assert.equal((await service.verifyIntegrity(id, hash2)).valid, true);
   }, SKIP);
 
-  await test('revokeReport invalidates verifyIntegrity', async () => {
-    const id   = randomId();
-    const hash = sha256hex('revoke-report-test');
-    await service.registerReport({ reportId: id, pdfHash: hash, studentId: 'STU-008' });
-    assert.equal((await service.verifyIntegrity(id, hash)).valid, true);
-    await service.revokeReport(id);
-    assert.equal((await service.verifyIntegrity(id, hash)).valid, false);
-  }, SKIP);
+  // CHANGED: revokeReport test removed. Contract v2 has no revokeReport function.
+  //          On-chain revocation was removed to cut gas cost. Set
+  //          report.blockchain.status = 'revoked' in MongoDB instead.
+  //          verifyIntegrity in v2 checks only pdfHash match — it has no
+  //          isRevoked field, so it cannot return false for a "revoked" report.
 
   await test('getReport returns correct owner and hash', async () => {
     const id   = randomId();
@@ -350,17 +297,15 @@ async function main() {
     await service.registerReport({ reportId: id, pdfHash: hash, studentId: 'STU-009' });
     const r = await service.getReport(id);
     assert.equal(r.pdfHash, helpers.encodeHash(hash));
-    assert.equal(r.isRevoked, false);
+    // CHANGED: removed assert.equal(r.isRevoked, false) — isRevoked was removed
+    //          from the v2 contract struct (pdfHash, owner, timestamp only).
     assert.ok(r.timestamp > 0);
     assert.ok(r.date);
   }, SKIP);
 
-  await test('getOwnerReports lists registered reports for signer', async () => {
-    const id = randomId();
-    await service.registerReport({ reportId: id, pdfHash: sha256hex('x'), studentId: 'S' });
-    const reports = await service.getOwnerReports(service.signerAddress);
-    assert.ok(reports.includes(helpers.encodeReportId(id)));
-  }, SKIP);
+  // CHANGED: getOwnerReports test removed. Contract v2 has no _ownerReports[] array
+  //          or getOwnerReports() function — the mapping was removed to save ~42k gas
+  //          per registerReport call. Query MongoDB reports collection by userId instead.
 
   // ══════════════════════════════════════════════════════════════
   // Summary
@@ -386,16 +331,17 @@ async function _deployContract() {
     );
     const fs   = require('fs');
     const path = require('path');
-    const abiPath = path.join(__dirname, '../artifacts/contracts/CareerReport.sol/CareerReport.abi.json');
-    const binPath = path.join(__dirname, '../artifacts/contracts/CareerReport.sol/CareerReport.bin');
+    // CHANGED: Hardhat compile produces CareerReport.json (not separate .abi.json / .bin)
+    const artifactPath = path.join(__dirname, '../artifacts/contracts/CareerReport.sol/CareerReport.json');
 
-    if (!fs.existsSync(abiPath) || !fs.existsSync(binPath)) {
+    if (!fs.existsSync(artifactPath)) { // CHANGED: single file check replaces two-file check
       console.log('  ⚠  Compiled artifacts not found — skipping live deploy');
       return null;
     }
 
-    const abi      = JSON.parse(fs.readFileSync(abiPath, 'utf8'));
-    const bytecode = '0x' + fs.readFileSync(binPath, 'utf8');
+    const artifact = JSON.parse(fs.readFileSync(artifactPath, 'utf8')); // CHANGED: single JSON
+    const abi      = artifact.abi;        // CHANGED: extract abi field
+    const bytecode = artifact.bytecode;   // CHANGED: already includes 0x prefix
     const factory  = new ethers.ContractFactory(abi, bytecode, signer);
     const contract = await factory.deploy();
     await contract.waitForDeployment();

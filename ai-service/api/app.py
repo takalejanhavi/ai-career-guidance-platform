@@ -184,7 +184,7 @@ def create_app(testing: bool = False) -> Flask:
 
         response_body = {
             "status"      : "success",
-            "top_careers" : _format_careers(result_dict["top_careers"]),
+            "top_careers" : _format_careers(result_dict["top_careers"], include_roles=True),
             "confidence"  : result_dict["confidence_summary"],
             "input"       : result_dict["input_features"],
             "model_info"  : {
@@ -253,16 +253,23 @@ def create_app(testing: bool = False) -> Flask:
             result = predictor.predict(input_data, top_n=3)
         except ValueError as e:
             return _error(422, "Input validation failed", {"error": str(e)})
+        except Exception as e:
+            logger.error("Explain failed: %s", e)
+            return _error(500, "Prediction failed", {"error": str(e)})
 
         r_dict = predictor.to_json(result)
 
-        # Full explanation including engineered features
         return jsonify({
             "status"              : "success",
-            "top_careers"         : _format_careers(r_dict["top_careers"], include_drivers=True),
+            "top_careers"         : _format_careers(r_dict["top_careers"], include_drivers=True, include_roles=True),
             "confidence"          : r_dict["confidence_summary"],
             "input"               : r_dict["input_features"],
             "engineered_features" : r_dict["engineered_features"],
+            "model_info"          : {
+                "version"   : result.model_version,
+                "n_classes" : result.n_classes,
+                "ensemble"  : "Random Forest (45%) + XGBoost (55%)",
+            },
         })
 
     # ── Example input endpoint ────────────────────────────────────
@@ -290,19 +297,22 @@ def create_app(testing: bool = False) -> Flask:
 
 
 # ── Helpers ────────────────────────────────────────────────────────
-def _format_careers(careers: list, include_drivers: bool = False) -> list:
+def _format_careers(careers: list, include_drivers: bool = False, include_roles: bool = False) -> list:
     out = []
     for c in careers:
         entry = {
-            "rank":           c["rank"],
-            "career":         c["career"],
-            "confidence_pct": c["confidence_pct"],
-            "confidence_tier":c["confidence_tier"],
-            "model_agreement":c["model_agreement"],
-            "description":    c["description"],
-            "key_traits":     c["key_traits"],
-            "growth_outlook": c["growth_outlook"],
-            "salary_range":   c["salary_range_usd"],
+            "rank":              c["rank"],
+            "career":            c["career"],
+            "confidence_pct":    c["confidence_pct"],
+            "confidence_tier":   c["confidence_tier"],
+            "rf_confidence":     c.get("rf_confidence"),
+            "xgb_confidence":    c.get("xgb_confidence"),
+            "model_agreement":   c["model_agreement"],
+            "description":       c["description"],
+            "key_traits":        c["key_traits"],
+            "growth_outlook":    c["growth_outlook"],
+            "salary_range":      c["salary_range_usd"],
+            "recommended_roles": c.get("recommended_roles", []),
         }
         if include_drivers:
             entry["top_drivers"] = c.get("top_drivers", [])

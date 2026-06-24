@@ -35,7 +35,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
           error:   { iconTheme: { primary: '#EF4444', secondary: '#111827' } },
         }}
       />
-      <ReactQueryDevtools initialIsOpen={false} />
+      {import.meta.env.DEV && <ReactQueryDevtools initialIsOpen={false} />}
     </QueryClientProvider>
   </React.StrictMode>
 );

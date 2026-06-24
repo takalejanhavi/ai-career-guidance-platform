@@ -86,7 +86,7 @@ services:
       - key:   CONTRACT_ADDRESS
         sync:  false
       - key:   BLOCKCHAIN_NETWORK
-        value: polygon
+        value: polygon-amoy
       - key:   FRONTEND_URL
         value: https://careerguidance.app
       - key:   RATE_LIMIT_MAX
@@ -166,6 +166,8 @@ services:
         value: "4"
       - key:   TIMEOUT
         value: "120"
+      - key:   ALLOWED_ORIGINS
+        value: "*"
 
   # ── Background Worker ─────────────────────────────────────────────
   - type:         worker
@@ -220,6 +222,12 @@ services:
         sync:  false
       - key:   EMAIL_FROM
         value: "CareerAI <noreply@careerguidance.app>"
+      - key:   FRONTEND_URL
+        value: https://careerguidance.app
+      - key:   S3_ENDPOINT
+        value: https://s3.amazonaws.com
+      - key:   BLOCKCHAIN_NETWORK
+        value: polygon-amoy
 
   # ── Redis ─────────────────────────────────────────────────────────
   - type:    redis

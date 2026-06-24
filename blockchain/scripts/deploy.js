@@ -91,14 +91,15 @@ async function main() {
   };
 
   // ── Verify ownership ──────────────────────────────────────────
-  const crOwner   = await careerReport.owner();
+  // CHANGED: CareerReport v2 has no owner — ownership concept removed to save gas.
+  //          CareerReportFactory still has its own owner state variable.
   const factOwner = await factory.owner();
   console.log(`Contract owners:`);
-  console.log(`  CareerReport         : ${crOwner}`);
+  console.log(`  CareerReport         : (none — v2 is permissionless, no owner state)`);
   console.log(`  CareerReportFactory  : ${factOwner}`);
 
-  if (crOwner.toLowerCase() !== deployer.address.toLowerCase()) {
-    throw new Error('CareerReport owner mismatch');
+  if (factOwner.toLowerCase() !== deployer.address.toLowerCase()) { // CHANGED: only check factory
+    throw new Error('CareerReportFactory owner mismatch');
   }
 
   // ── Save deployment manifest ──────────────────────────────────

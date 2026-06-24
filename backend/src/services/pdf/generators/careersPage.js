@@ -36,9 +36,27 @@ function renderCareersPage(doc, data) {
   }
   y += 30;
 
+  // ── Tier distribution summary ─────────────────────────────────
+  const tierCounts = { HIGH: 0, MEDIUM: 0, EMERGING: 0, LOW: 0 };
+  careers.forEach(c => {
+    const t = _normalizeTier(c.confidenceTier);
+    if (t in tierCounts) tierCounts[t]++;
+  });
+  const tierColors = { HIGH: '#10B981', MEDIUM: '#F59E0B', EMERGING: '#F97316', LOW: '#EF4444' };
+  let tx = marginX;
+  Object.entries(tierCounts).forEach(([tier, count]) => {
+    if (count === 0) return;
+    const label = `${tier}: ${count}`;
+    const tw = doc.font(FONTS.bold).fontSize(7).widthOfString(label) + 16;
+    draw.filledRect(doc, tx, y, tw, 16, { fill: tierColors[tier] + '20', radius: 6 });
+    doc.save().font(FONTS.bold).fontSize(7).fillColor(tierColors[tier])
+      .text(label, tx + 8, y + 4, { lineBreak: false }).restore();
+    tx += tw + 6;
+  });
+  y += 26;
+
   // ── Career cards ──────────────────────────────────────────────
   careers.forEach((career, idx) => {
-    const cardH = _estimateCareerCardHeight(career);
     y = _renderCareerCard(doc, career, marginX, y, contentWidth, idx, careers.length);
     y += SPACE.lg;
   });
@@ -102,6 +120,19 @@ function _renderCareerCard(doc, career, x, y, w, idx, total) {
   const titleW = doc.font(FONTS.bold).fontSize(14).widthOfString(career.title);
   draw.statusBadge(doc, career.category, x + 46 + titleW + 8, cy + 3, 'indigo');
 
+  // Confidence tier badge
+  if (career.confidenceTier) {
+    const tier       = _normalizeTier(career.confidenceTier);
+    const tierColors = { HIGH: '#10B981', MEDIUM: '#F59E0B', EMERGING: '#F97316', LOW: '#EF4444' };
+    const tc         = tierColors[tier] || COLORS.gray400;
+    const tierLabel  = tier;
+    const tierW      = doc.font(FONTS.bold).fontSize(7).widthOfString(tierLabel) + 12;
+    const tierX      = x + w - 100;
+    draw.filledRect(doc, tierX, cy + 2, tierW, 14, { fill: tc + '20', radius: 4 });
+    doc.save().font(FONTS.bold).fontSize(7).fillColor(tc)
+      .text(tierLabel, tierX + 6, cy + 5, { lineBreak: false }).restore();
+  }
+
   // Growth outlook badge
   const growthMap = {
     high_growth: { label: '↑ High Growth', var: 'success' },
@@ -112,7 +143,7 @@ function _renderCareerCard(doc, career, x, y, w, idx, total) {
   };
   const growth = growthMap[career.growthOutlook] || growthMap.stable;
   const growthX = x + w - 90;
-  draw.statusBadge(doc, growth.label, growthX, cy + 2, growth.var);
+  draw.statusBadge(doc, growth.label, growthX, cy + 18, growth.var);
 
   cy += 24;
 
@@ -197,24 +228,58 @@ function _renderCareerCard(doc, career, x, y, w, idx, total) {
     .text('TOP DRIVERS', col2X, c2y, { lineBreak: false }).restore();
   c2y += 13;
 
-  career.topDrivers.forEach(d => {
-    const pct = Math.round(d.impact * 100);
-    const col = d.direction === 'positive' ? COLORS.success : COLORS.danger;
+  (career.topDrivers || []).forEach(d => {
+    const pct  = Math.round(Math.abs(d.impact) * 1000) / 10;
+    const col  = d.direction === 'positive' ? COLORS.success : COLORS.danger;
     const icon = d.direction === 'positive' ? '↑' : '↓';
     doc.save().font(FONTS.regular).fontSize(8).fillColor(COLORS.gray600)
-      .text(`${icon} ${d.feature}`, col2X, c2y, { lineBreak: false }).restore();
+      .text(`${icon} ${(d.feature || '').replace(/_/g, ' ')}`, col2X, c2y, { lineBreak: false }).restore();
     doc.save().font(FONTS.bold).fontSize(8).fillColor(col)
-      .text(`+${pct}%`, col2X + colW - 30, c2y, { lineBreak: false }).restore();
+      .text(`${pct}%`, col2X + colW - 30, c2y, { lineBreak: false }).restore();
     c2y += 13;
   });
+
+  // ── Specialized paths (sub-roles) ─────────────────────────────
+  const roles = career.recommendedRoles || [];
+  if (roles.length > 0) {
+    c2y += 6;
+    doc.save().font(FONTS.bold).fontSize(8).fillColor(COLORS.gray400)
+      .text('SPECIALIZED PATHS', col2X, c2y, { lineBreak: false }).restore();
+    c2y += 13;
+    roles.slice(0, 3).forEach((role, ri) => {
+      doc.save().font(FONTS.regular).fontSize(8).fillColor(COLORS.gray600)
+        .text(`${ri + 1}. ${role}`, col2X, c2y, { lineBreak: false }).restore();
+      c2y += 12;
+    });
+  }
+
+  // ── Model agreement bar ───────────────────────────────────────
+  if (career.modelAgreement != null) {
+    c2y += 4;
+    const agrPct = Math.round(career.modelAgreement * 100);
+    doc.save().font(FONTS.bold).fontSize(8).fillColor(COLORS.gray400)
+      .text(`MODEL AGREEMENT  ${agrPct}%`, col2X, c2y, { lineBreak: false }).restore();
+    c2y += 12;
+    const barW = colW - 10;
+    draw.filledRect(doc, col2X, c2y, barW, 5, { fill: COLORS.gray100, radius: 3 });
+    const fillColor = agrPct >= 80 ? '#10B981' : agrPct >= 60 ? '#F59E0B' : '#EF4444';
+    draw.filledRect(doc, col2X, c2y, Math.round(barW * agrPct / 100), 5, { fill: fillColor, radius: 3 });
+    c2y += 10;
+  }
 
   return Math.max(barY, c2y) + 4;
 }
 
+function _normalizeTier(tier) {
+  const map = { 'Very High': 'HIGH', 'High': 'HIGH', 'Moderate': 'MEDIUM', 'Low': 'LOW' };
+  return map[tier] || tier || 'LOW';
+}
+
 function _estimateCareerCardHeight(career) {
-  // Rough estimate: heading + desc + columns
-  const descLines = Math.ceil(career.description.length / 90);
-  return 28 + descLines * 13 + 160;
+  const descLines  = Math.ceil((career.description || '').length / 90);
+  const rolesExtra = (career.recommendedRoles?.length > 0) ? 40 : 0;
+  const agrExtra   = career.modelAgreement != null ? 22 : 0;
+  return 28 + descLines * 13 + 175 + rolesExtra + agrExtra;
 }
 
 function _textHeight(text, w, fontSize, lineHeight) {

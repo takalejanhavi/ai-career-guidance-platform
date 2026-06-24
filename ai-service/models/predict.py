@@ -310,13 +310,15 @@ class CareerPredictor:
     _instance: Optional["CareerPredictor"] = None
 
     def __init__(self):
-        self._loaded  = False
-        self._fe      = None
-        self._le      = None
-        self._rf      = None
-        self._xgb     = None
-        self._classes = []
-        self._feat_names = []
+        self._loaded       = False
+        self._fe           = None
+        self._le           = None
+        self._rf           = None
+        self._xgb          = None
+        self._classes      = []
+        self._feat_names   = []
+        self._version_meta = {}
+        self.model_version = "1.0.0"
 
     # ── Singleton ──────────────────────────────────────────────────
     @classmethod
@@ -343,6 +345,14 @@ class CareerPredictor:
         self._xgb     = joblib.load(MODEL_DIR / "xgboost.joblib")
         self._classes = json.loads((MODEL_DIR / "class_names.json").read_text())
         self._feat_names = json.loads((MODEL_DIR / "feature_names.json").read_text())
+
+        version_path = MODEL_DIR / "version.json"
+        if version_path.exists():
+            self._version_meta = json.loads(version_path.read_text())
+            self.model_version = self._version_meta.get("version", "1.0.0")
+        else:
+            self._version_meta = {}
+
         self._loaded  = True
 
     # ── Validation ─────────────────────────────────────────────────
@@ -365,10 +375,10 @@ class CareerPredictor:
     # ── Confidence tier ────────────────────────────────────────────
     @staticmethod
     def _confidence_tier(prob: float) -> str:
-        if prob >= 0.75:  return "Very High"
-        if prob >= 0.55:  return "High"
-        if prob >= 0.35:  return "Moderate"
-        return "Low"
+        if prob >= 0.85:  return "HIGH"
+        if prob >= 0.70:  return "MEDIUM"
+        if prob >= 0.55:  return "EMERGING"
+        return "LOW"
 
     # ── Feature driver explanation ─────────────────────────────────
     def _feature_drivers(
@@ -491,6 +501,7 @@ class CareerPredictor:
             input_features       = validated,
             engineered_features  = fe_dict,
             confidence_summary   = summary,
+            model_version        = self.model_version,
             n_classes            = len(self._classes),
         )
 

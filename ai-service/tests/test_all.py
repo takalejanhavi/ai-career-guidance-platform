@@ -86,6 +86,10 @@ class TestFeatureEngineering:
             "communication": 65, "leadership": 60, "creativity": 72,
             "analytical_thinking": 85, "extroversion": 50,
             "conscientiousness": 78, "extracurricular": 60,
+            "coding_interest": 75, "biology_interest": 40,
+            "business_interest": 55, "design_interest": 45,
+            "teaching_interest": 40, "research_interest": 70,
+            "people_helping_interest": 50, "entrepreneurship_interest": 55,
         }])
 
     def test_output_shape_increases(self, fitted_fe, sample_row):
@@ -131,6 +135,40 @@ class TestFeatureEngineering:
         assert "interact_creative_comm"    in names
         assert "interact_leadership_expr"  in names
 
+    def test_feature_count_is_45(self):
+        """Audit requirement: exactly 45 engineered features (18 raw + 27 derived)."""
+        names = get_feature_importance_labels()
+        assert len(names) == 45, f"Expected 45 features, got {len(names)}: {names}"
+
+    def test_career_orientation_features_present(self):
+        names = get_feature_importance_labels()
+        orientations = [
+            "technical_orientation", "healthcare_orientation", "business_orientation",
+            "creative_orientation", "education_orientation", "research_orientation",
+        ]
+        for name in orientations:
+            assert name in names, f"Missing orientation feature: {name}"
+
+    def test_interest_interaction_features_present(self):
+        names = get_feature_importance_labels()
+        interactions = [
+            "interact_coding_analytical", "interact_biology_science",
+            "interact_design_creativity", "interact_business_leadership",
+            "interact_teaching_helping",
+        ]
+        for name in interactions:
+            assert name in names, f"Missing interaction feature: {name}"
+
+    def test_statistical_features_present(self):
+        names = get_feature_importance_labels()
+        assert "score_variance"        in names
+        assert "personality_extremity" in names
+
+    def test_raw_features_preserved_in_output(self):
+        names = get_feature_importance_labels()
+        for raw in RAW_FEATURES:
+            assert raw in names, f"Raw feature missing from output: {raw}"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Training pipeline tests (run only if artefacts present)
@@ -150,9 +188,22 @@ class TestTrainingArtefacts:
             "class_names.json",
             "feature_names.json",
             "metrics.json",
+            "version.json",
         ]
         for fname in required:
             assert (MODEL_DIR / fname).exists(), f"Missing: {fname}"
+
+    def test_version_json_structure(self):
+        version = json.loads((MODEL_DIR / "version.json").read_text())
+        assert "version"          in version
+        assert "training_date"    in version
+        assert "feature_count"    in version
+        assert "ensemble_weights" in version
+        assert "accuracy"         in version
+        assert "f1"               in version
+        assert version["feature_count"] == 45, \
+            f"Expected 45 features in version.json, got {version['feature_count']}"
+        assert version["ensemble_weights"] == {"rf": 0.45, "xgb": 0.55}
 
     def test_class_names_json(self):
         classes = json.loads((MODEL_DIR / "class_names.json").read_text())
@@ -194,6 +245,10 @@ class TestPredictor:
             "communication": 65, "leadership": 60, "creativity": 72,
             "analytical_thinking": 90, "extroversion": 45,
             "conscientiousness": 82, "extracurricular": 55,
+            "coding_interest": 80, "biology_interest": 40,
+            "business_interest": 55, "design_interest": 45,
+            "teaching_interest": 40, "research_interest": 75,
+            "people_helping_interest": 50, "entrepreneurship_interest": 55,
         }
 
     def test_returns_top3(self, predictor, good_input):
@@ -217,9 +272,23 @@ class TestPredictor:
 
     def test_confidence_tier_assigned(self, predictor, good_input):
         result = predictor.predict(good_input, top_n=3)
-        valid  = {"Very High", "High", "Moderate", "Low"}
+        valid  = {"HIGH", "MEDIUM", "EMERGING", "LOW"}
         for c in result.top_careers:
-            assert c.confidence_tier in valid
+            assert c.confidence_tier in valid, \
+                f"Unexpected tier '{c.confidence_tier}'; valid: {valid}"
+
+    def test_confidence_tier_thresholds(self):
+        """Verify tier boundaries: HIGH>=85%, MEDIUM>=70%, EMERGING>=55%, LOW<55%."""
+        from models.predict import CareerPredictor
+        _tier = CareerPredictor._confidence_tier
+        assert _tier(0.90) == "HIGH"
+        assert _tier(0.85) == "HIGH"
+        assert _tier(0.84) == "MEDIUM"
+        assert _tier(0.70) == "MEDIUM"
+        assert _tier(0.69) == "EMERGING"
+        assert _tier(0.55) == "EMERGING"
+        assert _tier(0.54) == "LOW"
+        assert _tier(0.10) == "LOW"
 
     def test_top_drivers_present(self, predictor, good_input):
         result = predictor.predict(good_input, top_n=1)
@@ -249,6 +318,29 @@ class TestPredictor:
         assert "models_agree" in result.confidence_summary
         assert "entropy"      in result.confidence_summary
 
+    def test_model_agreement_per_career_in_range(self, predictor, good_input):
+        result = predictor.predict(good_input, top_n=3)
+        for c in result.top_careers:
+            assert 0.0 <= c.model_agreement <= 1.0, \
+                f"model_agreement {c.model_agreement} out of [0,1] for {c.career}"
+
+    def test_recommended_roles_returned(self, predictor, good_input):
+        result = predictor.predict(good_input, top_n=3)
+        for c in result.top_careers:
+            assert isinstance(c.recommended_roles, list)
+            assert len(c.recommended_roles) <= 3
+
+    def test_recommended_roles_are_strings(self, predictor, good_input):
+        result = predictor.predict(good_input, top_n=1)
+        for role in result.top_careers[0].recommended_roles:
+            assert isinstance(role, str) and len(role) > 0
+
+    def test_rf_xgb_confidence_present(self, predictor, good_input):
+        result = predictor.predict(good_input, top_n=3)
+        for c in result.top_careers:
+            assert 0.0 <= c.rf_confidence  <= 1.0
+            assert 0.0 <= c.xgb_confidence <= 1.0
+
     def test_to_json_serialisable(self, predictor, good_input):
         import json
         result = predictor.predict(good_input)
@@ -263,12 +355,20 @@ class TestPredictor:
             "communication": 50, "leadership": 45, "creativity": 55,
             "analytical_thinking": 95, "extroversion": 35,
             "conscientiousness": 85, "extracurricular": 40,
+            "coding_interest": 90, "biology_interest": 30,
+            "business_interest": 30, "design_interest": 20,
+            "teaching_interest": 20, "research_interest": 80,
+            "people_helping_interest": 30, "entrepreneurship_interest": 35,
         }
         creative_student = {
             "math_score": 50, "science_score": 48, "english_score": 88,
             "communication": 90, "leadership": 55, "creativity": 95,
             "analytical_thinking": 55, "extroversion": 75,
             "conscientiousness": 65, "extracurricular": 90,
+            "coding_interest": 20, "biology_interest": 25,
+            "business_interest": 40, "design_interest": 90,
+            "teaching_interest": 55, "research_interest": 35,
+            "people_helping_interest": 60, "entrepreneurship_interest": 50,
         }
         r1 = predictor.predict(stem_student).top_careers[0].career
         r2 = predictor.predict(creative_student).top_careers[0].career
@@ -341,6 +441,10 @@ class TestAPIPredictEndpoint:
         "communication": 65, "leadership": 60, "creativity": 72,
         "analytical_thinking": 88, "extroversion": 45,
         "conscientiousness": 80, "extracurricular": 55,
+        "coding_interest": 80, "biology_interest": 35,
+        "business_interest": 60, "design_interest": 40,
+        "teaching_interest": 35, "research_interest": 70,
+        "people_helping_interest": 45, "entrepreneurship_interest": 55,
     }
 
     def test_predict_success(self, client):
@@ -387,8 +491,26 @@ class TestAPIPredictEndpoint:
         assert r.status_code == 200
         data = r.get_json()
         assert "engineered_features" in data
+        assert "model_info"          in data
+        assert "version" in data["model_info"]
         career = data["top_careers"][0]
-        assert "top_drivers" in career
+        assert "top_drivers"       in career
+        assert "recommended_roles" in career
+        assert isinstance(career["recommended_roles"], list)
+
+    def test_predict_explain_confidence_tier(self, client):
+        r    = client.post("/predict/explain", json=self.GOOD_BODY)
+        data = r.get_json()
+        valid_tiers = {"HIGH", "MEDIUM", "EMERGING", "LOW"}
+        for c in data["top_careers"]:
+            assert c["confidence_tier"] in valid_tiers, \
+                f"Unexpected tier: {c['confidence_tier']}"
+
+    def test_predict_includes_recommended_roles(self, client):
+        r    = client.post("/predict", json=self.GOOD_BODY)
+        data = r.get_json()
+        for c in data["top_careers"]:
+            assert "recommended_roles" in c
 
     def test_batch_predict(self, client):
         body = {"records": [self.GOOD_BODY, self.GOOD_BODY, self.GOOD_BODY], "top_n": 2}
