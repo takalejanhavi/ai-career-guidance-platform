@@ -26,8 +26,14 @@ async function getQuestions({ section, page = 1, limit = 20 }) {
 
 async function startAssessment(userId, body, req) {
   // Check for existing in-progress assessment
-  const existing = await Assessment.findOne({ userId, status: { $in: ['draft','in_progress'] }, deletedAt: null });
-  if (existing) throw AppError.conflict('You already have an assessment in progress', 'ASSESSMENT_IN_PROGRESS');
+  const existing = await Assessment.findOne({
+  userId,
+  status: { $in: ['draft', 'in_progress'] },
+  deletedAt: null,}).sort({ createdAt: -1 });
+
+  if (existing) {
+    return existing;
+  }
 
   // Determine attempt number
   const completedCount = await Assessment.countDocuments({ userId, status: 'scored' });
