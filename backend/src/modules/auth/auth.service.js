@@ -6,6 +6,7 @@ const AppError = require('../../utils/AppError');
 const tokens   = require('../../utils/tokens');
 const { Queues } = require('../../config/redis');
 const AuditLog = require('../audit/auditlog.model');
+const logger   = require('../../config/logger');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -47,25 +48,62 @@ async function register({ firstName, lastName, email, password, role, phone }, i
 }
 
 async function login({ email, password }, ip) {
-  // Load user with sensitive fields
-  const user = await User.findOne({ email, deletedAt: null })
-    .select('+passwordHash +security +tokens');
+  // Defensive normalisation — Zod already lowercases, but guard at the DB
+  // layer too so a missing/misconfigured validate middleware never causes a
+  // wrong-user lookup.
+  const normalisedEmail = (email || '').toLowerCase().trim();
+  if (!normalisedEmail || !password) {
+    throw AppError.unauthorized('Incorrect email or password');
+  }
 
+  // Use the dedicated static that selects +passwordHash +security +tokens.
+  // Using a named static prevents any future caller from accidentally querying
+  // the user without the password field and hitting the bcrypt crash.
+  const user = await User.findByEmailWithPassword(normalisedEmail);
+
+  // Return the same vague message for "not found" and "wrong password" to
+  // prevent account enumeration.
   if (!user) throw AppError.unauthorized('Incorrect email or password');
+
+  // Check active / suspended BEFORE touching failed-login counters.
+  // A suspended user should not increment their attempt counter on wrong
+  // passwords, and the 403 message is different from the 401 message.
+  if (!user.isActive || user.isSuspended) {
+    throw AppError.forbidden('This account is not active. Please contact support.');
+  }
 
   if (user.isLocked) {
     throw AppError.unauthorized('Account temporarily locked due to multiple failed attempts. Try again in 15 minutes.');
   }
 
-  const isMatch = await user.comparePassword(password);
-  if (!isMatch) {
-    await user.incrementFailedLogin();
-    await AuditLog.write({ actor: user, action: 'auth.login_failed', resourceType: 'User', resourceId: user._id, outcome: 'failure', metadata: { reason: 'wrong_password', attempts: user.security.failedLoginAttempts }, requestContext: { ip } });
+  // GUARD: if passwordHash was not loaded (select:false edge-case or null in
+  // DB), comparePassword returns false via its own guard — but an explicit
+  // check here lets us emit a clear server-side warning rather than silently
+  // failing with a generic 401.
+  if (!user.passwordHash) {
+    logger.error('login: passwordHash missing for user %s — possible DB integrity issue', user._id);
     throw AppError.unauthorized('Incorrect email or password');
   }
 
-  if (!user.isActive || user.isSuspended) {
-    throw AppError.forbidden('This account is not active. Please contact support.');
+  let isMatch = false;
+  try {
+    isMatch = await user.comparePassword(password);
+  } catch (err) {
+    logger.error('login: comparePassword threw unexpectedly for user %s: %s', user._id, err.message);
+    throw AppError.unauthorized('Incorrect email or password');
+  }
+
+  if (!isMatch) {
+    // Capture attempt count before incrementing for the audit log.
+    const attemptsBefore = user.security?.failedLoginAttempts ?? 0;
+    await user.incrementFailedLogin();
+    await AuditLog.write({
+      actor: user, action: 'auth.login_failed', resourceType: 'User', resourceId: user._id,
+      outcome: 'failure',
+      metadata: { reason: 'wrong_password', attempts: attemptsBefore + 1 },
+      requestContext: { ip },
+    });
+    throw AppError.unauthorized('Incorrect email or password');
   }
 
   await user.resetFailedLogin(ip);
@@ -177,11 +215,23 @@ async function changePassword(userId, { currentPassword, newPassword }, ip) {
   const user = await User.findById(userId).select('+passwordHash +tokens +security');
   if (!user) throw AppError.notFound('User');
 
-  const isMatch = await user.comparePassword(currentPassword);
+  if (!user.passwordHash) {
+    logger.error('changePassword: passwordHash missing for user %s — possible DB integrity issue', user._id);
+    throw AppError.badRequest('Current password is incorrect', 'WRONG_PASSWORD');
+  }
+
+  let isMatch = false;
+  try {
+    isMatch = await user.comparePassword(currentPassword);
+  } catch (err) {
+    logger.error('changePassword: comparePassword threw unexpectedly for user %s: %s', user._id, err.message);
+    throw AppError.badRequest('Current password is incorrect', 'WRONG_PASSWORD');
+  }
+
   if (!isMatch) throw AppError.badRequest('Current password is incorrect', 'WRONG_PASSWORD');
 
   user.passwordHash             = newPassword;
-  user.tokens.refreshTokenHash  = null;  // force re-login on other devices
+  user.tokens.refreshTokenHash  = null;
   await user.save();
 
   await Queues.EMAIL.add('password-changed', { userId: user._id, email: user.email, firstName: user.firstName });

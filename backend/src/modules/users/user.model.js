@@ -85,10 +85,17 @@ UserSchema.pre('save', async function (next) {
 });
 
 // Methods
-UserSchema.methods.comparePassword = function (candidate) {
+UserSchema.methods.comparePassword = async function (candidate) {
+  // Guard: if either argument is missing, return false instead of letting
+  // bcrypt.compare() throw synchronously ("data and hash arguments required").
+  // Root causes: passwordHash not selected (select:false), null stored in DB,
+  // or candidate undefined due to upstream body-parsing edge case.
+  if (!candidate || !this.passwordHash) return false;
   return bcrypt.compare(candidate, this.passwordHash);
 };
 UserSchema.methods.incrementFailedLogin = async function () {
+  // Guard: security sub-doc has select:false — only touch it if it was loaded.
+  if (!this.security) return this;
   this.security.failedLoginAttempts += 1;
   if (this.security.failedLoginAttempts >= 5) {
     this.security.lockUntil = new Date(Date.now() + 15 * 60 * 1000);
@@ -96,6 +103,8 @@ UserSchema.methods.incrementFailedLogin = async function () {
   return this.save({ validateBeforeSave: false });
 };
 UserSchema.methods.resetFailedLogin = async function (ip) {
+  // Guard: security sub-doc has select:false — only touch it if it was loaded.
+  if (!this.security) return this;
   this.security.failedLoginAttempts = 0;
   this.security.lockUntil           = null;
   this.security.lastLoginAt         = new Date();
@@ -124,6 +133,14 @@ UserSchema.methods.softDelete = async function () {
 // Statics
 UserSchema.statics.findByEmail = function (email) {
   return this.findOne({ email: email.toLowerCase().trim(), deletedAt: null });
+};
+
+// findByEmail with password — used in auth flows that need comparePassword.
+// Separate from findByEmail to avoid accidentally exposing passwordHash via
+// the default static (which is intentionally read-only / no password loaded).
+UserSchema.statics.findByEmailWithPassword = function (email) {
+  return this.findOne({ email: email.toLowerCase().trim(), deletedAt: null })
+    .select('+passwordHash +security +tokens');
 };
 
 module.exports = model('User', UserSchema);
