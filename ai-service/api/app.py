@@ -98,11 +98,12 @@ def create_app(testing: bool = False) -> Flask:
     predictor = None
     model_error = None
     try:
+        logger.info("Loading predictor...")
         predictor = get_predictor()
         logger.info("Predictor loaded successfully")
     except Exception as exc:
+        logger.exception("PREDICTOR LOAD FAILED")
         model_error = str(exc)
-        logger.warning("Predictor not loaded: %s", exc)
 
     # ── Health ────────────────────────────────────────────────────
     @app.route("/health", methods=["GET"])
