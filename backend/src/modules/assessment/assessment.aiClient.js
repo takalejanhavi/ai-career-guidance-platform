@@ -165,16 +165,36 @@ function buildFeatureVector(responses) {
  * @throws {AIResponseValidationError}   Response shape unexpected
  */
 async function callPredictExplain(featureVector, { timeoutMs = 90000, retries = 2 } = {}) {
-  const url = `${env.AI_SERVICE_URL}/predict/explain`;
-  const payload = { ...featureVector, top_n: 3 };
+  // Normalize trailing slash — prevents //predict/explain double-slash URL
+  // when AI_SERVICE_URL env var ends with '/'. Flask strict-slash routing
+  // would 404 on the double-slash path, which callPredictExplain converts
+  // to 502 (line: status === 404 ? 502).
+  const baseUrl = (env.AI_SERVICE_URL || '').replace(/\/$/, '');
+  const url     = `${baseUrl}/predict/explain`;
+
+  // compute_drivers=false: skip the permutation-sensitivity loop (~120 extra
+  // predict_proba calls on every feature × top_n career combination).
+  // On Render Free's throttled CPU that loop can exceed Render's 60-second
+  // edge-proxy timeout, causing the proxy to close the connection and return
+  // HTTP 502 before Axios fires its 90-second timeout.
+  // top_drivers will be [] in the response; dimensionWeights becomes all-zero
+  // which is acceptable for production scoring.
+  const payload = { ...featureVector, top_n: 3, compute_drivers: false };
+
+  logger.info('[AIClient] → POST %s feature_keys=%d', url, Object.keys(featureVector).length);
 
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
+      const t0 = Date.now();
       const { data } = await axios.post(url, payload, {
         headers: { 'X-Internal-Token': env.AI_SERVICE_SECRET },
         timeout: timeoutMs,
       });
+      const elapsedMs = Date.now() - t0;
+
+      logger.info('[AIClient] ← 200 /predict/explain in %dms top_career=%s',
+        elapsedMs, data?.top_careers?.[0]?.career ?? 'unknown');
 
       const parsed = predictExplainResponseSchema.safeParse(data);
       if (!parsed.success) {
@@ -191,16 +211,25 @@ async function callPredictExplain(featureVector, { timeoutMs = 90000, retries = 
       lastErr = err;
       const status = err.response?.status;
 
+      logger.error('[AIClient] ✗ attempt=%d status=%s code=%s message=%s',
+        attempt + 1,
+        status   ?? 'none',
+        err.code ?? 'none',
+        err.message,
+        {
+          url,
+          responseBody   : err.response?.data,
+          responseHeaders: err.response?.headers,
+        }
+      );
+
       // Don't retry on 4xx — these are payload/config errors that won't
       // resolve with a retry (e.g. 422 validation, 401 auth).
       if (status && status >= 400 && status < 500) break;
 
       if (attempt < retries) {
         const backoffMs = 500 * 2 ** attempt; // 500ms, 1000ms
-        logger.warn(
-          '[AIClient] /predict/explain attempt %d failed (%s), retrying in %dms',
-          attempt + 1, err.message, backoffMs
-        );
+        logger.warn('[AIClient] retrying in %dms (attempt %d/%d)', backoffMs, attempt + 1, retries);
         await new Promise(r => setTimeout(r, backoffMs));
       }
     }

@@ -264,31 +264,58 @@ def create_app(testing: bool = False) -> Flask:
     @app.route("/predict/explain", methods=["POST"])
     @require_internal_token
     def predict_explain():
-        """Full prediction with per-feature permutation-sensitivity drivers."""
+        """Full prediction with optional per-feature permutation-sensitivity drivers.
+
+        Body params:
+          compute_drivers (bool, default true) — set false to skip the ~120-call
+            permutation loop and return empty top_drivers[].  The backend passes
+            false to avoid Render's 60-second edge-proxy timeout on CPU-throttled
+            Render Free instances.
+        """
         predictor, err = _get_predictor()
         if predictor is None:
             return _error(503, "Model is warming up, please retry in a few seconds",
                           {"detail": err or "warming_up"})
 
-        body       = request.get_json(silent=True)
+        body = request.get_json(silent=True)
+        logger.info(
+            "POST /predict/explain content-length=%s keys=%s token=%s",
+            request.headers.get("Content-Length", "?"),
+            ",".join(sorted(body.keys())) if body else "none",
+            "present" if request.headers.get("X-Internal-Token") else "MISSING",
+        )
+
         input_data = body.get("scores", body) if body else {}
 
+        # compute_drivers is opt-in when called from the backend (false = fast path,
+        # avoids Render's 60-second proxy timeout).  Manual/test callers that need
+        # driver data can omit the param to get the full permutation analysis.
+        raw_flag      = body.get("compute_drivers", True) if body else True
+        compute_drivers = str(raw_flag).lower() not in ("false", "0", "no")
+
+        t0 = time.perf_counter()
         try:
-            # compute_drivers=True: runs ~40 × top_n extra predict_proba calls.
-            # Only used here — the basic /predict endpoint skips this.
-            result = predictor.predict(input_data, top_n=3, compute_drivers=True)
+            result = predictor.predict(input_data, top_n=3, compute_drivers=compute_drivers)
         except ValueError as e:
             return _error(422, "Input validation failed", {"error": str(e)})
         except Exception as e:
-            logger.error("Explain failed: %s", e)
+            logger.error(
+                "Explain failed after %.0fms drivers=%s: %s",
+                (time.perf_counter() - t0) * 1000,
+                compute_drivers,
+                traceback.format_exc(),
+            )
             return _error(500, "Prediction failed", {"error": str(e)})
+
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        logger.info("POST /predict/explain ok %.1fms drivers=%s", elapsed_ms, compute_drivers)
 
         r_dict = predictor.to_json(result)
 
         return jsonify({
             "status"              : "success",
             "top_careers"         : _format_careers(
-                r_dict["top_careers"], include_drivers=True, include_roles=True
+                r_dict["top_careers"], include_drivers=compute_drivers, include_roles=True
             ),
             "confidence"          : r_dict["confidence_summary"],
             "input"               : r_dict["input_features"],
