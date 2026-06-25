@@ -7,13 +7,16 @@ Loads trained artefacts and produces:
   - Uncertainty / confidence tier
   - Model agreement metrics
 
-Thread-safe singleton pattern: models are loaded once at startup.
+Thread-safe singleton: models are loaded ONCE on first request, not at
+import time.  This prevents Gunicorn worker OOM during startup.
 """
 
 import json
+import logging
+import time
+import threading
 import warnings
 from pathlib import Path
-from functools import lru_cache
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -25,9 +28,25 @@ import sys
 warnings.filterwarnings("ignore")
 
 # ── Paths ──────────────────────────────────────────────────────────
-ROOT = Path(__file__).parent.parent
+ROOT      = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 MODEL_DIR = ROOT / "models" / "artefacts"
+
+_logger    = logging.getLogger("career_predictor")
+_load_lock = threading.Lock()   # guards singleton initialisation
+
+
+# ── Memory diagnostic helper ───────────────────────────────────────
+def _log_mem(label: str) -> None:
+    """Log current process RSS.  Never raises — diagnostic only."""
+    try:
+        import resource
+        # Linux: ru_maxrss is in kilobytes
+        rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        _logger.info("[mem] %-30s  %.0f MB RSS", label, rss_mb)
+    except Exception:
+        pass
+
 
 # ── Input feature order ────────────────────────────────────────────
 RAW_FEATURES = [
@@ -51,7 +70,7 @@ RAW_FEATURES = [
     "entrepreneurship_interest",
 ]
 
-# ── Career narrative explanations ─────────────────────────────────
+# ── Career narrative explanations ──────────────────────────────────
 CAREER_NARRATIVES = {
     "Software Engineer": {
         "description": "Build software systems, applications, and infrastructure. Strong match for high analytical thinkers with solid math skills.",
@@ -59,7 +78,6 @@ CAREER_NARRATIVES = {
         "growth":      "high_growth",
         "salary_usd":  (85_000, 180_000),
     },
-    \
     "Data Scientist": {
         "description": "Extract insights from complex datasets using statistics and machine learning. Ideal for math-science students who love patterns.",
         "key_traits":  ["Math mastery", "Analytical thinking", "Science foundation", "Curiosity"],
@@ -133,178 +151,154 @@ CAREER_NARRATIVES = {
         "salary_usd":  (45_000, 85_000),
     },
 }
+
 # ── Career Subfields ───────────────────────────────────────────────
 CAREER_SUBFIELDS = {
-
     "Software Engineer": {
-        "Backend Developer": ["coding_interest", "analytical_thinking"],
-        "Frontend Developer": ["coding_interest", "creativity", "communication"],
+        "Backend Developer":    ["coding_interest", "analytical_thinking"],
+        "Frontend Developer":   ["coding_interest", "creativity", "communication"],
         "Full Stack Developer": ["coding_interest", "analytical_thinking", "communication"],
-        "Cloud Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"],
-        "DevOps Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"]
+        "Cloud Engineer":       ["coding_interest", "analytical_thinking", "conscientiousness"],
+        "DevOps Engineer":      ["coding_interest", "analytical_thinking", "conscientiousness"],
     },
-
     "Data Scientist": {
-        "Machine Learning Engineer": ["coding_interest", "research_interest", "analytical_thinking"],
-        "Data Analyst": ["analytical_thinking", "math_score", "communication"],
-        "AI Engineer": ["coding_interest", "research_interest", "science_score"],
-        "Data Engineer": ["coding_interest", "analytical_thinking", "conscientiousness"],
-        "Business Intelligence Analyst": ["business_interest", "analytical_thinking", "communication"]
+        "Machine Learning Engineer":      ["coding_interest", "research_interest", "analytical_thinking"],
+        "Data Analyst":                   ["analytical_thinking", "math_score", "communication"],
+        "AI Engineer":                    ["coding_interest", "research_interest", "science_score"],
+        "Data Engineer":                  ["coding_interest", "analytical_thinking", "conscientiousness"],
+        "Business Intelligence Analyst":  ["business_interest", "analytical_thinking", "communication"],
     },
-
     "Biomedical Researcher": {
-        "Genetics Researcher": ["biology_interest", "research_interest", "science_score"],
-        "Microbiologist": ["biology_interest", "science_score", "analytical_thinking"],
+        "Genetics Researcher":         ["biology_interest", "research_interest", "science_score"],
+        "Microbiologist":              ["biology_interest", "science_score", "analytical_thinking"],
         "Clinical Research Associate": ["research_interest", "communication", "science_score"],
-        "Biotechnology Researcher": ["biology_interest", "research_interest", "analytical_thinking"],
-        "Biomedical Scientist": ["biology_interest", "science_score", "research_interest"]
+        "Biotechnology Researcher":    ["biology_interest", "research_interest", "analytical_thinking"],
+        "Biomedical Scientist":        ["biology_interest", "science_score", "research_interest"],
     },
-
     "Civil Engineer": {
-        "Structural Engineer": ["math_score", "analytical_thinking", "science_score"],
+        "Structural Engineer":     ["math_score", "analytical_thinking", "science_score"],
         "Transportation Engineer": ["math_score", "leadership", "analytical_thinking"],
-        "Construction Manager": ["leadership", "communication", "conscientiousness"],
-        "Environmental Engineer": ["science_score", "research_interest", "analytical_thinking"],
-        "Geotechnical Engineer": ["math_score", "science_score", "analytical_thinking"]
+        "Construction Manager":    ["leadership", "communication", "conscientiousness"],
+        "Environmental Engineer":  ["science_score", "research_interest", "analytical_thinking"],
+        "Geotechnical Engineer":   ["math_score", "science_score", "analytical_thinking"],
     },
-
     "Business Analyst": {
-        "Product Analyst": ["business_interest", "analytical_thinking", "communication"],
-        "Operations Analyst": ["business_interest", "analytical_thinking", "conscientiousness"],
-        "Strategy Consultant": ["business_interest", "leadership", "communication"],
-        "Market Research Analyst": ["business_interest", "research_interest", "communication"],
-        "Business Analyst": ["business_interest", "analytical_thinking", "communication"]
+        "Product Analyst":          ["business_interest", "analytical_thinking", "communication"],
+        "Operations Analyst":       ["business_interest", "analytical_thinking", "conscientiousness"],
+        "Strategy Consultant":      ["business_interest", "leadership", "communication"],
+        "Market Research Analyst":  ["business_interest", "research_interest", "communication"],
+        "Business Analyst":         ["business_interest", "analytical_thinking", "communication"],
     },
-
     "Entrepreneur": {
-        "Startup Founder": ["entrepreneurship_interest", "leadership", "communication"],
-        "Tech Entrepreneur": ["entrepreneurship_interest", "coding_interest", "leadership"],
+        "Startup Founder":       ["entrepreneurship_interest", "leadership", "communication"],
+        "Tech Entrepreneur":     ["entrepreneurship_interest", "coding_interest", "leadership"],
         "E-commerce Entrepreneur": ["entrepreneurship_interest", "business_interest", "communication"],
-        "Business Owner": ["entrepreneurship_interest", "leadership", "conscientiousness"],
-        "Social Entrepreneur": ["entrepreneurship_interest", "people_helping_interest", "leadership"]
+        "Business Owner":        ["entrepreneurship_interest", "leadership", "conscientiousness"],
+        "Social Entrepreneur":   ["entrepreneurship_interest", "people_helping_interest", "leadership"],
     },
-
     "Marketing Manager": {
-        "Digital Marketing Manager": ["communication", "creativity", "business_interest"],
-        "Brand Manager": ["leadership", "communication", "creativity"],
-        "SEO Specialist": ["analytical_thinking", "communication", "business_interest"],
-        "Content Marketing Manager": ["communication", "creativity", "english_score"],
-        "Social Media Strategist": ["communication", "creativity", "extroversion"]
+        "Digital Marketing Manager":  ["communication", "creativity", "business_interest"],
+        "Brand Manager":              ["leadership", "communication", "creativity"],
+        "SEO Specialist":             ["analytical_thinking", "communication", "business_interest"],
+        "Content Marketing Manager":  ["communication", "creativity", "english_score"],
+        "Social Media Strategist":    ["communication", "creativity", "extroversion"],
     },
-
     "Graphic Designer": {
-        "UI/UX Designer": ["design_interest", "creativity", "communication"],
+        "UI/UX Designer":  ["design_interest", "creativity", "communication"],
         "Motion Designer": ["design_interest", "creativity", "analytical_thinking"],
-        "Brand Designer": ["design_interest", "communication", "creativity"],
-        "Illustrator": ["design_interest", "creativity", "english_score"],
-        "Game Artist": ["design_interest", "creativity", "coding_interest"]
+        "Brand Designer":  ["design_interest", "communication", "creativity"],
+        "Illustrator":     ["design_interest", "creativity", "english_score"],
+        "Game Artist":     ["design_interest", "creativity", "coding_interest"],
     },
-
     "Content Writer": {
         "Technical Writer": ["english_score", "communication", "coding_interest"],
-        "Copywriter": ["english_score", "creativity", "communication"],
-        "Editor": ["english_score", "conscientiousness", "communication"],
-        "Journalist": ["english_score", "communication", "research_interest"],
-        "Content Writer": ["english_score", "creativity", "communication"]
+        "Copywriter":       ["english_score", "creativity", "communication"],
+        "Editor":           ["english_score", "conscientiousness", "communication"],
+        "Journalist":       ["english_score", "communication", "research_interest"],
+        "Content Writer":   ["english_score", "creativity", "communication"],
     },
-
     "Architect": {
-        "Interior Designer": ["design_interest", "creativity", "communication"],
-        "Urban Planner": ["analytical_thinking", "leadership", "design_interest"],
-        "Landscape Architect": ["design_interest", "creativity", "science_score"],
+        "Interior Designer":             ["design_interest", "creativity", "communication"],
+        "Urban Planner":                 ["analytical_thinking", "leadership", "design_interest"],
+        "Landscape Architect":           ["design_interest", "creativity", "science_score"],
         "Sustainable Design Consultant": ["design_interest", "research_interest", "science_score"],
-        "Architect": ["design_interest", "math_score", "creativity"]
+        "Architect":                     ["design_interest", "math_score", "creativity"],
     },
-
     "Medical Doctor": {
-        "Cardiologist": ["biology_interest", "science_score", "research_interest"],
-        "Neurologist": ["biology_interest", "research_interest", "analytical_thinking"],
-        "Pediatrician": ["people_helping_interest", "communication", "biology_interest"],
+        "Cardiologist":       ["biology_interest", "science_score", "research_interest"],
+        "Neurologist":        ["biology_interest", "research_interest", "analytical_thinking"],
+        "Pediatrician":       ["people_helping_interest", "communication", "biology_interest"],
         "Orthopedic Surgeon": ["biology_interest", "science_score", "conscientiousness"],
-        "General Physician": ["biology_interest", "science_score", "communication"]
+        "General Physician":  ["biology_interest", "science_score", "communication"],
     },
-
     "Psychologist": {
-        "Clinical Psychologist": ["people_helping_interest", "communication", "conscientiousness"],
-        "Counseling Psychologist": ["people_helping_interest", "communication"],
-        "School Psychologist": ["people_helping_interest", "teaching_interest", "communication"],
-        "Behavioral Therapist": ["people_helping_interest", "communication", "analytical_thinking"],
-        "Industrial Psychologist": ["communication", "leadership", "analytical_thinking"]
+        "Clinical Psychologist":    ["people_helping_interest", "communication", "conscientiousness"],
+        "Counseling Psychologist":  ["people_helping_interest", "communication"],
+        "School Psychologist":      ["people_helping_interest", "teaching_interest", "communication"],
+        "Behavioral Therapist":     ["people_helping_interest", "communication", "analytical_thinking"],
+        "Industrial Psychologist":  ["communication", "leadership", "analytical_thinking"],
     },
-
     "Teacher / Educator": {
-        "Professor": ["teaching_interest", "research_interest", "communication"],
-        "Lecturer": ["teaching_interest", "communication", "leadership"],
-        "Academic Counselor": ["people_helping_interest", "communication", "leadership"],
-        "School Teacher": ["teaching_interest", "communication", "people_helping_interest"],
-        "Curriculum Designer": ["teaching_interest", "creativity", "communication"]
-    }
+        "Professor":           ["teaching_interest", "research_interest", "communication"],
+        "Lecturer":            ["teaching_interest", "communication", "leadership"],
+        "Academic Counselor":  ["people_helping_interest", "communication", "leadership"],
+        "School Teacher":      ["teaching_interest", "communication", "people_helping_interest"],
+        "Curriculum Designer": ["teaching_interest", "creativity", "communication"],
+    },
 }
 
 
 # ── Data classes ───────────────────────────────────────────────────
 @dataclass
 class CareerMatch:
-    rank:             int
-    career:           str
-    confidence:       float
-    confidence_pct:   float
-    confidence_tier:  str
-    rf_confidence:    float
-    xgb_confidence:   float
-    model_agreement:  float
-    description:      str
-    key_traits:       list[str]
-    growth_outlook:   str
-    salary_range_usd: tuple[int, int]
-    top_drivers:      list[dict]
+    rank:              int
+    career:            str
+    confidence:        float
+    confidence_pct:    float
+    confidence_tier:   str
+    rf_confidence:     float
+    xgb_confidence:    float
+    model_agreement:   float
+    description:       str
+    key_traits:        list[str]
+    growth_outlook:    str
+    salary_range_usd:  tuple[int, int]
+    top_drivers:       list[dict]
     recommended_roles: list[str] = field(default_factory=list)
 
 
 @dataclass
 class PredictionResult:
-    top_careers:          list[CareerMatch]
-    input_features:       dict
-    engineered_features:  dict
-    confidence_summary:   dict
-    model_version:        str = "1.0.0"
-    n_classes:            int = 13
+    top_careers:         list[CareerMatch]
+    input_features:      dict
+    engineered_features: dict
+    confidence_summary:  dict
+    model_version:       str = "1.0.0"
+    n_classes:           int = 13
 
 
-def get_dynamic_roles(career: str, profile: dict, top_n: int = 3):
-
+# ── Dynamic role ranking ───────────────────────────────────────────
+def get_dynamic_roles(career: str, profile: dict, top_n: int = 3) -> list[str]:
     role_map = CAREER_SUBFIELDS.get(career, {})
-
     if not role_map:
         return []
-
     role_scores = {}
-
     for role, features in role_map.items():
-
-        vals = []
-
-        for feat in features:
-            if feat in profile:
-                vals.append(profile[feat])
-
+        vals = [profile[f] for f in features if f in profile]
         if vals:
             role_scores[role] = sum(vals) / len(vals)
-
-    ranked = sorted(
-        role_scores.items(),
-        key=lambda x: x[1],
-        reverse=True
-    )
-
-    return [role for role, _ in ranked[:top_n]]
+    ranked = sorted(role_scores.items(), key=lambda x: x[1], reverse=True)
+    return [r for r, _ in ranked[:top_n]]
 
 
 # ── Predictor class ────────────────────────────────────────────────
 class CareerPredictor:
     """
     Thread-safe career prediction engine.
-    Call load() once, then predict() as many times as needed.
+
+    Models are loaded LAZILY on the first call to get_instance() — not at
+    module import or Gunicorn worker startup.  This is the key safeguard
+    against OOM kills on memory-constrained hosts (Render Free, 512 MB).
     """
 
     _instance: Optional["CareerPredictor"] = None
@@ -320,15 +314,18 @@ class CareerPredictor:
         self._version_meta = {}
         self.model_version = "1.0.0"
 
-    # ── Singleton ──────────────────────────────────────────────────
+    # ── Thread-safe singleton ──────────────────────────────────────
     @classmethod
     def get_instance(cls) -> "CareerPredictor":
         if cls._instance is None:
-            cls._instance = cls()
-            cls._instance.load()
+            with _load_lock:                 # prevent concurrent initialisation
+                if cls._instance is None:    # double-checked locking
+                    inst = cls()
+                    inst.load()
+                    cls._instance = inst     # publish only after full load
         return cls._instance
 
-    # ── Load artefacts ─────────────────────────────────────────────
+    # ── Artefact loading with diagnostics ─────────────────────────
     def load(self) -> None:
         if self._loaded:
             return
@@ -339,11 +336,42 @@ class CareerPredictor:
                 "Run `python models/train.py` first."
             )
 
-        self._fe      = joblib.load(MODEL_DIR / "feature_engineer.joblib")
-        self._le      = joblib.load(MODEL_DIR / "label_encoder.joblib")
-        self._rf      = joblib.load(MODEL_DIR / "random_forest.joblib")
-        self._xgb     = joblib.load(MODEL_DIR / "xgboost.joblib")
-        self._classes = json.loads((MODEL_DIR / "class_names.json").read_text())
+        t_start = time.perf_counter()
+        _log_mem("load start")
+
+        # Report on-disk sizes before loading (helps diagnose RAM vs disk ratio)
+        for name in (
+            "feature_engineer.joblib", "label_encoder.joblib",
+            "random_forest.joblib",    "xgboost.joblib",
+        ):
+            p = MODEL_DIR / name
+            if p.exists():
+                _logger.info(
+                    "[artifact] %-32s  %.1f MB on disk",
+                    name, p.stat().st_size / 1_048_576,
+                )
+
+        _logger.info("Loading feature_engineer…")
+        self._fe = joblib.load(MODEL_DIR / "feature_engineer.joblib")
+        _logger.info("Loading label_encoder…")
+        self._le = joblib.load(MODEL_DIR / "label_encoder.joblib")
+        _log_mem("after feature_engineer + label_encoder")
+
+        _logger.info("Loading random_forest (%.1f MB)…",
+                     (MODEL_DIR / "random_forest.joblib").stat().st_size / 1_048_576)
+        t0 = time.perf_counter()
+        self._rf = joblib.load(MODEL_DIR / "random_forest.joblib")
+        _logger.info("RF loaded in %.1fs", time.perf_counter() - t0)
+        _log_mem("after random_forest")
+
+        _logger.info("Loading xgboost (%.1f MB)…",
+                     (MODEL_DIR / "xgboost.joblib").stat().st_size / 1_048_576)
+        t0 = time.perf_counter()
+        self._xgb = joblib.load(MODEL_DIR / "xgboost.joblib")
+        _logger.info("XGB loaded in %.1fs", time.perf_counter() - t0)
+        _log_mem("after xgboost")
+
+        self._classes    = json.loads((MODEL_DIR / "class_names.json").read_text())
         self._feat_names = json.loads((MODEL_DIR / "feature_names.json").read_text())
 
         version_path = MODEL_DIR / "version.json"
@@ -353,12 +381,17 @@ class CareerPredictor:
         else:
             self._version_meta = {}
 
-        self._loaded  = True
+        self._loaded = True
+        elapsed = time.perf_counter() - t_start
+        _log_mem("load complete")
+        _logger.info(
+            "All models loaded in %.1fs | version=%s | classes=%d | features=%d",
+            elapsed, self.model_version, len(self._classes), len(self._feat_names),
+        )
 
     # ── Validation ─────────────────────────────────────────────────
     @staticmethod
     def validate_input(data: dict) -> dict:
-        """Validate and coerce input; raise ValueError on bad input."""
         cleaned = {}
         for feat in RAW_FEATURES:
             if feat not in data:
@@ -375,9 +408,9 @@ class CareerPredictor:
     # ── Confidence tier ────────────────────────────────────────────
     @staticmethod
     def _confidence_tier(prob: float) -> str:
-        if prob >= 0.85:  return "HIGH"
-        if prob >= 0.70:  return "MEDIUM"
-        if prob >= 0.55:  return "EMERGING"
+        if prob >= 0.85: return "HIGH"
+        if prob >= 0.70: return "MEDIUM"
+        if prob >= 0.55: return "EMERGING"
         return "LOW"
 
     # ── Feature driver explanation ─────────────────────────────────
@@ -385,8 +418,10 @@ class CareerPredictor:
         self, X_eng_row: np.ndarray, career_idx: int, top_n: int = 5
     ) -> list[dict]:
         """
-        Approximate feature contributions via permutation-style sensitivity.
-        Returns top_n features most responsible for this career's probability.
+        Permutation-style feature sensitivity for one career class.
+        Only called when compute_drivers=True (i.e. /predict/explain).
+        Each call makes len(feat_names) RF inference passes — skip for
+        the basic /predict endpoint to save CPU and latency.
         """
         rf_proba  = self._rf.predict_proba(X_eng_row)[0, career_idx]
         drivers   = []
@@ -394,53 +429,51 @@ class CareerPredictor:
 
         for i, fname in enumerate(self._feat_names):
             orig_val         = X_eng_row[0, i]
-            X_perturb[0, i]  = 0.0                         # zero out
-            p_rf_perturb     = self._rf.predict_proba(X_perturb)[0, career_idx]
-            X_perturb[0, i]  = orig_val                    # restore
-
-            impact = rf_proba - p_rf_perturb               # positive → helps
+            X_perturb[0, i]  = 0.0
+            p_perturb        = self._rf.predict_proba(X_perturb)[0, career_idx]
+            X_perturb[0, i]  = orig_val
+            impact = rf_proba - p_perturb
             drivers.append({
-                "feature":    fname,
-                "impact":     round(float(impact), 4),
-                "direction":  "positive" if impact >= 0 else "negative",
+                "feature":   fname,
+                "impact":    round(float(impact), 4),
+                "direction": "positive" if impact >= 0 else "negative",
             })
 
         drivers.sort(key=lambda d: abs(d["impact"]), reverse=True)
         return drivers[:top_n]
 
-    # ── Core predict ──────────────────────────────────────────────
-    def predict(self, raw_input: dict, top_n: int = 3) -> PredictionResult:
+    # ── Core predict ───────────────────────────────────────────────
+    def predict(
+        self,
+        raw_input: dict,
+        top_n: int = 3,
+        compute_drivers: bool = False,
+    ) -> PredictionResult:
         """
         Generate top-N career recommendations.
 
         Parameters
         ----------
-        raw_input : dict with keys matching RAW_FEATURES
-        top_n     : number of careers to return (default 3)
-
-        Returns
-        -------
-        PredictionResult dataclass
+        raw_input       : dict with keys matching RAW_FEATURES
+        top_n           : number of careers to return
+        compute_drivers : run permutation-based feature attribution.
+                          Set True only for /predict/explain — each career
+                          adds ~40 extra model inference calls.
         """
         if not self._loaded:
             self.load()
 
-        # Validate
         validated = self.validate_input(raw_input)
 
-        # Build DataFrame for feature engineering
         row_df  = pd.DataFrame([validated])
-        X_eng   = self._fe.transform(row_df)          # shape (1, n_feats)
+        X_eng   = self._fe.transform(row_df)
 
-        # Model probabilities
-        rf_proba  = self._rf.predict_proba(X_eng)[0]   # shape (n_classes,)
+        rf_proba  = self._rf.predict_proba(X_eng)[0]
         xgb_proba = self._xgb.predict_proba(X_eng)[0]
         ens_proba = 0.45 * rf_proba + 0.55 * xgb_proba
 
-        # Rank by ensemble probability (descending)
         ranked_idx = np.argsort(ens_proba)[::-1]
 
-        # Build CareerMatch objects for top_n
         matches = []
         for rank, idx in enumerate(ranked_idx[:top_n], start=1):
             career_name = self._classes[idx]
@@ -456,28 +489,28 @@ class CareerPredictor:
                 "salary_usd":  (50_000, 120_000),
             })
 
-            drivers = self._feature_drivers(X_eng, idx, top_n=5)
-
-            recommended_roles = get_dynamic_roles(     career_name,     validated,     top_n=3 )
+            drivers = (
+                self._feature_drivers(X_eng, idx, top_n=5)
+                if compute_drivers else []
+            )
 
             matches.append(CareerMatch(
-    rank             = rank,
-    career           = career_name,
-    confidence       = round(conf, 4),
-    confidence_pct   = round(conf * 100, 1),
-    confidence_tier  = self._confidence_tier(conf),
-    rf_confidence    = round(rf_conf, 4),
-    xgb_confidence   = round(xgb_conf, 4),
-    model_agreement  = round(agreement, 4),
-    description      = narr["description"],
-    key_traits       = narr["key_traits"],
-    growth_outlook   = narr["growth"],
-    salary_range_usd = narr["salary_usd"],
-    top_drivers      = drivers,
-    recommended_roles = recommended_roles,
-))
+                rank              = rank,
+                career            = career_name,
+                confidence        = round(conf, 4),
+                confidence_pct    = round(conf * 100, 1),
+                confidence_tier   = self._confidence_tier(conf),
+                rf_confidence     = round(rf_conf, 4),
+                xgb_confidence    = round(xgb_conf, 4),
+                model_agreement   = round(agreement, 4),
+                description       = narr["description"],
+                key_traits        = narr["key_traits"],
+                growth_outlook    = narr["growth"],
+                salary_range_usd  = narr["salary_usd"],
+                top_drivers       = drivers,
+                recommended_roles = get_dynamic_roles(career_name, validated),
+            ))
 
-        # Confidence summary
         top_conf    = float(ens_proba[ranked_idx[0]])
         second_conf = float(ens_proba[ranked_idx[1]]) if len(ranked_idx) > 1 else 0.0
         summary = {
@@ -486,44 +519,40 @@ class CareerPredictor:
             "prediction_certainty":  self._confidence_tier(top_conf),
             "rf_top_match":          self._classes[int(np.argmax(rf_proba))],
             "xgb_top_match":         self._classes[int(np.argmax(xgb_proba))],
-            "models_agree":          np.argmax(rf_proba) == np.argmax(xgb_proba),
+            "models_agree":          bool(np.argmax(rf_proba) == np.argmax(xgb_proba)),
             "entropy":               round(float(-np.sum(ens_proba * np.log(ens_proba + 1e-9))), 4),
         }
 
-        # Engineered features for transparency
         fe_dict = {
             name: round(float(val), 2)
             for name, val in zip(self._feat_names, X_eng[0])
         }
 
         return PredictionResult(
-            top_careers          = matches,
-            input_features       = validated,
-            engineered_features  = fe_dict,
-            confidence_summary   = summary,
-            model_version        = self.model_version,
-            n_classes            = len(self._classes),
+            top_careers         = matches,
+            input_features      = validated,
+            engineered_features = fe_dict,
+            confidence_summary  = summary,
+            model_version       = self.model_version,
+            n_classes           = len(self._classes),
         )
 
     def to_json(self, result: PredictionResult) -> dict:
-        """Serialise PredictionResult to a JSON-safe dict (all native Python types)."""
-        import numpy as np
         def _coerce(obj):
             if isinstance(obj, dict):
                 return {k: _coerce(v) for k, v in obj.items()}
             if isinstance(obj, list):
                 return [_coerce(i) for i in obj]
-            if isinstance(obj, (np.bool_,)):
+            if isinstance(obj, np.bool_):
                 return bool(obj)
-            if isinstance(obj, (np.integer,)):
+            if isinstance(obj, np.integer):
                 return int(obj)
-            if isinstance(obj, (np.floating,)):
+            if isinstance(obj, np.floating):
                 return float(obj)
             if isinstance(obj, tuple) and len(obj) == 2 and all(isinstance(x, int) for x in obj):
                 return {"min": obj[0], "max": obj[1], "currency": "USD"}
             return obj
-        d = asdict(result)
-        return _coerce(d)
+        return _coerce(asdict(result))
 
 
 # ── Module-level convenience ───────────────────────────────────────
@@ -532,49 +561,23 @@ def get_predictor() -> CareerPredictor:
 
 
 if __name__ == "__main__":
-    # Quick smoke test
     sample = {
-    "math_score": 85,
-    "science_score": 80,
-    "english_score": 80,
-    "communication": 75,
-    "leadership": 70,
-    "creativity": 70,
-    "analytical_thinking": 85,
-    "extroversion": 65,
-    "conscientiousness": 80,
-    "extracurricular": 70,
-
-    "coding_interest": 75,
-    "biology_interest": 40,
-    "business_interest": 65,
-    "design_interest": 50,
-    "teaching_interest": 50,
-    "research_interest": 75,
-    "people_helping_interest": 50,
-    "entrepreneurship_interest": 65,
-}
-    
-
+        "math_score": 85, "science_score": 80, "english_score": 80,
+        "communication": 75, "leadership": 70, "creativity": 70,
+        "analytical_thinking": 85, "extroversion": 65, "conscientiousness": 80,
+        "extracurricular": 70, "coding_interest": 75, "biology_interest": 40,
+        "business_interest": 65, "design_interest": 50, "teaching_interest": 50,
+        "research_interest": 75, "people_helping_interest": 50,
+        "entrepreneurship_interest": 65,
+    }
     print("Loading predictor…")
-    predictor = get_predictor()
-    result    = predictor.predict(sample, top_n=3)
-
+    p = get_predictor()
+    result = p.predict(sample, top_n=3, compute_drivers=True)
     print(f"\nTop {len(result.top_careers)} Career Recommendations:")
     print("=" * 55)
     for m in result.top_careers:
         print(f"\n#{m.rank}  {m.career}")
         print(f"    Confidence : {m.confidence_pct:.1f}%  ({m.confidence_tier})")
         print(f"    RF / XGB   : {m.rf_confidence*100:.1f}% / {m.xgb_confidence*100:.1f}%")
-        print(f"    Agreement  : {m.model_agreement*100:.1f}%")
         print(f"    Description: {m.description[:80]}…")
-        print(f"    Key traits : {', '.join(m.key_traits[:3])}")
-        print(f"    Salary     : ${m.salary_range_usd[0]:,}–${m.salary_range_usd[1]:,}")
-        print(f"    Top driver : {m.top_drivers[0]['feature']} ({m.top_drivers[0]['direction']})")
-
-        if m.recommended_roles:
-             print("    Suggested Roles:")
-             for role in m.recommended_roles:
-                print(f"      • {role}")
-
     print(f"\nSummary: {result.confidence_summary}")

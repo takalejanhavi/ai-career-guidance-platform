@@ -1,0 +1,14 @@
+# Production inference dependencies only.
+# DO NOT add shap, imbalanced-learn, pytest, scipy, or marshmallow here —
+# those are training/dev tools that add 200+ MB to the image and are never
+# called during inference.
+
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.5.0
+xgboost==2.0.3
+joblib==1.4.2
+flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+python-dotenv==1.0.1

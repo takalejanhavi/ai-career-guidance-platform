@@ -1,11 +1,34 @@
+# Python bytecode
 __pycache__/
 *.pyc
-.pytest_cache/
+*.pyo
+
+# Virtual environments
 .venv/
 venv/
+env/
+
+# Test infrastructure
 tests/
+.pytest_cache/
+.coverage
+
+# Local secrets — never ship these
 .env
-*.md
-models/artefacts/
-data/*.csv
+.env.*
+!.env.example
+
+# Git metadata
 .git/
+.gitignore
+
+# Dataset — 12k-row CSV is not needed for inference; artefacts are self-contained
+data/*.csv
+
+# Dev docs
+*.md
+
+# NOTE: models/artefacts/ is intentionally NOT excluded.
+# The trained .joblib files are the production deployment artefact.
+# They are committed to the repo and copied into the image at build time.
+# Training is a local/CI step, not a Docker build step.

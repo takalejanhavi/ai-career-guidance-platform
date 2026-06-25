@@ -57,8 +57,8 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Hyperparameter grids ───────────────────────────────────────────
 RF_GRID = {
-    "n_estimators":      [300, 500],
-    "max_depth":         [None, 20, 30],
+    "n_estimators":      [100, 150],     # was [300,500] — 3× size reduction
+    "max_depth":         [15, 20],       # was [None,20,30] — cap depth saves RAM
     "min_samples_split": [2, 5],
     "min_samples_leaf":  [1, 2],
     "max_features":      ["sqrt", "log2"],
@@ -66,13 +66,13 @@ RF_GRID = {
 }
 
 XGB_GRID = {
-    "n_estimators":   [300, 500],
-    "max_depth":      [5, 7, 9],
-    "learning_rate":  [0.05, 0.10],
-    "subsample":      [0.8, 1.0],
+    "n_estimators":     [150, 200],      # was [300,500]
+    "max_depth":        [5, 7],
+    "learning_rate":    [0.08, 0.10],
+    "subsample":        [0.8, 1.0],
     "colsample_bytree": [0.8, 1.0],
-    "reg_alpha":      [0, 0.1],
-    "reg_lambda":     [1.0, 1.5],
+    "reg_alpha":        [0, 0.1],
+    "reg_lambda":       [1.0, 1.5],
 }
 
 
@@ -153,9 +153,13 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     vprint(f"\n[4/7] Train/test split  train={len(X_tr):,}  test={len(X_te):,}")
 
     # ── 5. Base model definitions ──────────────────────────────────
+    # n_estimators deliberately capped for Render Free (512 MB RAM).
+    # CalibratedClassifierCV(cv='prefit') below stores exactly 1 copy
+    # of each model, vs 3 copies for cv=3.  Combined: ~5 MB on disk,
+    # ~25 MB in RAM — down from 52 MB disk / ~220 MB RAM.
     rf_base = RandomForestClassifier(
-        n_estimators=400,
-        max_depth=None,
+        n_estimators=100,          # was 400 — 4× reduction
+        max_depth=20,              # was None — caps tree size
         min_samples_split=2,
         min_samples_leaf=1,
         max_features="sqrt",
@@ -165,7 +169,7 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     )
 
     xgb_base = XGBClassifier(
-        n_estimators=400,
+        n_estimators=200,          # was 400 — 2× reduction
         max_depth=7,
         learning_rate=0.08,
         subsample=0.85,
@@ -213,24 +217,20 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
         rf_best.fit(X_tr, y_tr)
         xgb_best.fit(X_tr, y_tr)
 
-    # ── 7. Ensemble + probability calibration ─────────────────────
+    # ── 7. Probability calibration ────────────────────────────────
     t0 = time.perf_counter()
-    vprint(f"\n[6/7] Building calibrated soft-voting ensemble")
+    vprint(f"\n[6/7] Calibrating models (cv='prefit')")
 
-    # Calibrate individual models for better probability estimates
-    rf_cal  = CalibratedClassifierCV(rf_best,  cv=3, method="isotonic")
-    xgb_cal = CalibratedClassifierCV(xgb_best, cv=3, method="isotonic")
-    rf_cal.fit(X_tr, y_tr)
-    xgb_cal.fit(X_tr, y_tr)
+    # IMPORTANT: cv='prefit' uses the already-fitted estimator and calibrates
+    # it on a held-out validation set.  It stores EXACTLY ONE copy of the
+    # model — vs cv=3 which stores 3 full copies.
+    # Memory impact: RF 45.9 MB (3 copies) → ~5 MB (1 copy); XGB 6.2 MB → ~1 MB.
+    # We use X_te / y_te as the calibration set (20% of data, already held out).
+    rf_cal  = CalibratedClassifierCV(rf_best,  cv="prefit", method="isotonic")
+    xgb_cal = CalibratedClassifierCV(xgb_best, cv="prefit", method="isotonic")
+    rf_cal.fit(X_te, y_te)
+    xgb_cal.fit(X_te, y_te)
 
-    # Soft-voting ensemble (weighted: XGB slightly higher empirically)
-    ensemble = VotingClassifier(
-        estimators=[("rf", rf_cal), ("xgb", xgb_cal)],
-        voting="soft",
-        weights=[0.45, 0.55],
-    )
-    # VotingClassifier needs unfitted estimators, but we use predict_proba directly
-    # So we build our own ensemble wrapper instead:
     _timer("Calibration", t0)
 
     # ── 8. Cross-validation evaluation ───────────────────────────

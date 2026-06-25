@@ -1,15 +1,24 @@
 """
 Career Prediction Flask API
 =============================
-REST API exposing the career prediction engine with:
-  - POST /predict         — main prediction endpoint
-  - POST /predict/batch   — batch predictions
-  - GET  /careers         — career catalogue
-  - GET  /health          — liveness + readiness
-  - GET  /metrics         — model performance metrics
-  - GET  /features        — feature schema
+REST endpoints:
+  POST /predict           — top-N career recommendations
+  POST /predict/batch     — batch predictions
+  POST /predict/explain   — full prediction with feature drivers
+  GET  /careers           — career catalogue
+  GET  /health | /healthz — liveness + readiness
+  GET  /metrics           — model performance metrics
+  GET  /features          — feature schema
+  GET  /example           — sample request body
 
-Security: validates input strictly; all errors return structured JSON.
+Memory contract
+---------------
+Models are NOT loaded at import or create_app() time.  A background
+daemon thread (started in wsgi.py) loads them after the socket is bound.
+All predict endpoints gate on CareerPredictor._instance being ready and
+return HTTP 503 until the warmup thread completes (typically 5–15 s).
+/healthz always returns HTTP 200 — Render requires this to mark the
+service as live.  The "ready" field in the body indicates model state.
 """
 
 import os
@@ -25,13 +34,11 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 
-# ── Path setup ────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from models.predict import get_predictor, RAW_FEATURES, CAREER_NARRATIVES
-from data.generate_dataset import CAREERS
+from models.predict import get_predictor, RAW_FEATURES, CAREER_NARRATIVES, CareerPredictor
+from data.generate_dataset import CAREERS  # noqa: F401 — kept for catalogue compat
 
-# ── Logging ───────────────────────────────────────────────────────
 logging.basicConfig(
     level   = logging.INFO,
     format  = "%(asctime)s [%(levelname)s] %(name)s — %(message)s",
@@ -39,16 +46,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger("career_api")
 
-# ── App factory ────────────────────────────────────────────────────
+
 def create_app(testing: bool = False) -> Flask:
     app = Flask(__name__)
-    app.config["TESTING"]    = testing
+    app.config["TESTING"]      = testing
     app.config["JSON_SORT_KEYS"] = False
 
-    # CORS — allow the frontend origin
     CORS(app, origins=os.getenv("ALLOWED_ORIGINS", "*").split(","))
 
-    # ── Request timing ────────────────────────────────────────────
+    # ── Request timing ─────────────────────────────────────────────
     @app.before_request
     def _start_timer():
         g.start = time.perf_counter()
@@ -61,7 +67,7 @@ def create_app(testing: bool = False) -> Flask:
         response.headers["X-API-Version"] = "1.0.0"
         return response
 
-    # ── Error handlers ────────────────────────────────────────────
+    # ── Error handlers ─────────────────────────────────────────────
     def _error(code: int, message: str, details=None) -> tuple:
         body = {"status": "error", "code": code, "message": message}
         if details is not None:
@@ -81,7 +87,7 @@ def create_app(testing: bool = False) -> Flask:
         logger.error("Unhandled exception: %s", traceback.format_exc())
         return _error(500, "Internal server error")
 
-    # ── Auth guard (optional token) ───────────────────────────────
+    # ── Auth guard ─────────────────────────────────────────────────
     API_TOKEN = os.getenv("AI_SERVICE_SECRET", "")
 
     def require_internal_token(f):
@@ -94,32 +100,44 @@ def create_app(testing: bool = False) -> Flask:
             return f(*args, **kwargs)
         return decorated
 
-    # ── Load predictor eagerly ────────────────────────────────────
-    predictor = None
-    model_error = None
-    try:
-        logger.info("Loading predictor...")
-        predictor = get_predictor()
-        logger.info("Predictor loaded successfully")
-    except Exception as exc:
-        logger.exception("PREDICTOR LOAD FAILED")
-        model_error = str(exc)
+    # ── Lazy predictor accessor ────────────────────────────────────
+    def _get_predictor():
+        """
+        Return (predictor, None) if ready, or (None, error_str) if not.
+        Does NOT block — if the warmup thread hasn't finished yet, returns
+        (None, "warming_up") so the endpoint can return 503 immediately.
+        """
+        inst = CareerPredictor._instance
+        if inst is not None and inst._loaded:
+            return inst, None
+        # Singleton not ready — warmup thread is still running (or failed).
+        # Try to get it; if it raises or blocks more than we want, let the
+        # caller handle the 503.
+        try:
+            p = get_predictor()   # returns instantly if already loaded
+            return p, None
+        except Exception as exc:
+            logger.error("Predictor unavailable: %s", exc)
+            return None, str(exc)
 
-    # ── Health ────────────────────────────────────────────────────
-    @app.route("/health", methods=["GET"])
+    # ── /healthz — ALWAYS 200 so Render marks service as live ─────
+    @app.route("/health",  methods=["GET"])
     @app.route("/healthz", methods=["GET"])
     def health():
-        ready = predictor is not None
+        inst  = CareerPredictor._instance
+        ready = inst is not None and inst._loaded
         body  = {
-            "status"   : "ok" if ready else "degraded",
+            "status"   : "ok",                                    # always ok
             "ready"    : ready,
-            "model"    : "loaded" if ready else f"unavailable: {model_error}",
+            "model"    : "loaded" if ready else "warming_up",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version"  : "1.0.0",
         }
-        return jsonify(body), 200 if ready else 503
+        # Always HTTP 200 — Render kills the service if health returns non-2xx.
+        # The "ready" field tells callers whether predictions are available.
+        return jsonify(body), 200
 
-    # ── Feature schema ────────────────────────────────────────────
+    # ── /features ──────────────────────────────────────────────────
     @app.route("/features", methods=["GET"])
     def features():
         schema = {
@@ -134,22 +152,21 @@ def create_app(testing: bool = False) -> Flask:
         }
         return jsonify({"status": "success", "features": schema, "count": len(schema)})
 
-    # ── Career catalogue ──────────────────────────────────────────
+    # ── /careers ───────────────────────────────────────────────────
     @app.route("/careers", methods=["GET"])
     def career_catalogue():
         catalogue = []
         for career_name, info in CAREER_NARRATIVES.items():
-            entry = {
-                "name":         career_name,
-                "description":  info["description"],
-                "key_traits":   info["key_traits"],
-                "growth":       info["growth"],
-                "salary_usd":   {"min": info["salary_usd"][0], "max": info["salary_usd"][1]},
-            }
-            catalogue.append(entry)
+            catalogue.append({
+                "name":        career_name,
+                "description": info["description"],
+                "key_traits":  info["key_traits"],
+                "growth":      info["growth"],
+                "salary_usd":  {"min": info["salary_usd"][0], "max": info["salary_usd"][1]},
+            })
         return jsonify({"status": "success", "careers": catalogue, "count": len(catalogue)})
 
-    # ── Model metrics ─────────────────────────────────────────────
+    # ── /metrics ───────────────────────────────────────────────────
     @app.route("/metrics", methods=["GET"])
     def model_metrics():
         metrics_path = Path(__file__).parent.parent / "models" / "artefacts" / "metrics.json"
@@ -158,23 +175,26 @@ def create_app(testing: bool = False) -> Flask:
         metrics = json.loads(metrics_path.read_text())
         return jsonify({"status": "success", "metrics": metrics})
 
-    # ── /predict (single) ─────────────────────────────────────────
+    # ── /predict ───────────────────────────────────────────────────
     @app.route("/predict", methods=["POST"])
     @require_internal_token
     def predict():
+        predictor, err = _get_predictor()
         if predictor is None:
-            return _error(503, f"Model not loaded: {model_error}")
+            return _error(503, "Model is warming up, please retry in a few seconds",
+                          {"detail": err or "warming_up"})
 
         body = request.get_json(silent=True)
         if not body:
             return _error(400, "Request body must be JSON with Content-Type: application/json")
 
-        # Support nested or flat input
         input_data = body.get("scores", body)
         top_n      = min(int(body.get("top_n", 3)), 10)
 
         try:
-            result = predictor.predict(input_data, top_n=top_n)
+            # compute_drivers=False: skip the 40×N predict_proba permutation
+            # loop — reduces latency from ~8 s → ~0.3 s for basic predict.
+            result = predictor.predict(input_data, top_n=top_n, compute_drivers=False)
         except ValueError as e:
             return _error(422, "Input validation failed", {"error": str(e)})
         except Exception as e:
@@ -183,7 +203,7 @@ def create_app(testing: bool = False) -> Flask:
 
         result_dict = predictor.to_json(result)
 
-        response_body = {
+        return jsonify({
             "status"      : "success",
             "top_careers" : _format_careers(result_dict["top_careers"], include_roles=True),
             "confidence"  : result_dict["confidence_summary"],
@@ -193,15 +213,16 @@ def create_app(testing: bool = False) -> Flask:
                 "n_classes" : result.n_classes,
                 "ensemble"  : "Random Forest (45%) + XGBoost (55%)",
             },
-        }
-        return jsonify(response_body)
+        })
 
-    # ── /predict/batch ────────────────────────────────────────────
+    # ── /predict/batch ─────────────────────────────────────────────
     @app.route("/predict/batch", methods=["POST"])
     @require_internal_token
     def predict_batch():
+        predictor, err = _get_predictor()
         if predictor is None:
-            return _error(503, f"Model not loaded: {model_error}")
+            return _error(503, "Model is warming up, please retry in a few seconds",
+                          {"detail": err or "warming_up"})
 
         body = request.get_json(silent=True)
         if not body or "records" not in body:
@@ -219,7 +240,7 @@ def create_app(testing: bool = False) -> Flask:
 
         for idx, record in enumerate(records):
             try:
-                result = predictor.predict(record, top_n=top_n)
+                result = predictor.predict(record, top_n=top_n, compute_drivers=False)
                 r_dict = predictor.to_json(result)
                 results.append({
                     "index"       : idx,
@@ -239,19 +260,23 @@ def create_app(testing: bool = False) -> Flask:
             "failed"     : len(errors),
         })
 
-    # ── /predict/explain ──────────────────────────────────────────
+    # ── /predict/explain ───────────────────────────────────────────
     @app.route("/predict/explain", methods=["POST"])
     @require_internal_token
     def predict_explain():
-        """Full prediction with detailed feature importance explanation."""
+        """Full prediction with per-feature permutation-sensitivity drivers."""
+        predictor, err = _get_predictor()
         if predictor is None:
-            return _error(503, f"Model not loaded: {model_error}")
+            return _error(503, "Model is warming up, please retry in a few seconds",
+                          {"detail": err or "warming_up"})
 
         body       = request.get_json(silent=True)
         input_data = body.get("scores", body) if body else {}
 
         try:
-            result = predictor.predict(input_data, top_n=3)
+            # compute_drivers=True: runs ~40 × top_n extra predict_proba calls.
+            # Only used here — the basic /predict endpoint skips this.
+            result = predictor.predict(input_data, top_n=3, compute_drivers=True)
         except ValueError as e:
             return _error(422, "Input validation failed", {"error": str(e)})
         except Exception as e:
@@ -262,7 +287,9 @@ def create_app(testing: bool = False) -> Flask:
 
         return jsonify({
             "status"              : "success",
-            "top_careers"         : _format_careers(r_dict["top_careers"], include_drivers=True, include_roles=True),
+            "top_careers"         : _format_careers(
+                r_dict["top_careers"], include_drivers=True, include_roles=True
+            ),
             "confidence"          : r_dict["confidence_summary"],
             "input"               : r_dict["input_features"],
             "engineered_features" : r_dict["engineered_features"],
@@ -273,24 +300,22 @@ def create_app(testing: bool = False) -> Flask:
             },
         })
 
-    # ── Example input endpoint ────────────────────────────────────
+    # ── /example ───────────────────────────────────────────────────
     @app.route("/example", methods=["GET"])
     def example():
         return jsonify({
             "description": "Example prediction request body",
             "endpoint"   : "POST /predict",
             "body": {
-                "math_score":          85,
-                "science_score":       78,
-                "english_score":       70,
-                "communication":       65,
-                "leadership":          60,
-                "creativity":          72,
-                "analytical_thinking": 88,
-                "extroversion":        45,
-                "conscientiousness":   80,
-                "extracurricular":     55,
-                "top_n":               3,
+                "math_score": 85, "science_score": 78, "english_score": 70,
+                "communication": 65, "leadership": 60, "creativity": 72,
+                "analytical_thinking": 88, "extroversion": 45,
+                "conscientiousness": 80, "extracurricular": 55,
+                "coding_interest": 75, "biology_interest": 20,
+                "business_interest": 45, "design_interest": 40,
+                "teaching_interest": 35, "research_interest": 70,
+                "people_helping_interest": 40, "entrepreneurship_interest": 50,
+                "top_n": 3,
             },
         })
 
@@ -298,23 +323,28 @@ def create_app(testing: bool = False) -> Flask:
 
 
 # ── Helpers ────────────────────────────────────────────────────────
-def _format_careers(careers: list, include_drivers: bool = False, include_roles: bool = False) -> list:
+def _format_careers(
+    careers: list,
+    include_drivers: bool = False,
+    include_roles:   bool = False,
+) -> list:
     out = []
     for c in careers:
         entry = {
-            "rank":              c["rank"],
-            "career":            c["career"],
-            "confidence_pct":    c["confidence_pct"],
-            "confidence_tier":   c["confidence_tier"],
-            "rf_confidence":     c.get("rf_confidence"),
-            "xgb_confidence":    c.get("xgb_confidence"),
-            "model_agreement":   c["model_agreement"],
-            "description":       c["description"],
-            "key_traits":        c["key_traits"],
-            "growth_outlook":    c["growth_outlook"],
-            "salary_range":      c["salary_range_usd"],
-            "recommended_roles": c.get("recommended_roles", []),
+            "rank":            c["rank"],
+            "career":          c["career"],
+            "confidence_pct":  c["confidence_pct"],
+            "confidence_tier": c["confidence_tier"],
+            "rf_confidence":   c.get("rf_confidence"),
+            "xgb_confidence":  c.get("xgb_confidence"),
+            "model_agreement": c["model_agreement"],
+            "description":     c["description"],
+            "key_traits":      c["key_traits"],
+            "growth_outlook":  c["growth_outlook"],
+            "salary_range":    c["salary_range_usd"],
         }
+        if include_roles:
+            entry["recommended_roles"] = c.get("recommended_roles", [])
         if include_drivers:
             entry["top_drivers"] = c.get("top_drivers", [])
         out.append(entry)
@@ -323,24 +353,29 @@ def _format_careers(careers: list, include_drivers: bool = False, include_roles:
 
 def _feat_description(feat: str) -> str:
     descs = {
-        "math_score":          "Proficiency in mathematics (algebra, calculus, statistics)",
-        "science_score":       "Understanding of natural sciences (physics, chemistry, biology)",
-        "english_score":       "Language proficiency, reading comprehension, and writing ability",
-        "communication":       "Ability to express ideas clearly in verbal and written form",
-        "leadership":          "Capacity to lead, motivate, and guide others",
-        "creativity":          "Originality, innovation, and creative problem-solving",
-        "analytical_thinking": "Logical reasoning, pattern recognition, and critical analysis",
-        "extroversion":        "Preference for social interaction and external stimulation",
-        "conscientiousness":   "Organisation, diligence, reliability, and self-discipline",
-        "extracurricular":     "Engagement in activities outside formal academics",
+        "math_score":               "Proficiency in mathematics (algebra, calculus, statistics)",
+        "science_score":            "Understanding of natural sciences (physics, chemistry, biology)",
+        "english_score":            "Language proficiency, reading comprehension, and writing ability",
+        "communication":            "Ability to express ideas clearly in verbal and written form",
+        "leadership":               "Capacity to lead, motivate, and guide others",
+        "creativity":               "Originality, innovation, and creative problem-solving",
+        "analytical_thinking":      "Logical reasoning, pattern recognition, and critical analysis",
+        "extroversion":             "Preference for social interaction and external stimulation",
+        "conscientiousness":        "Organisation, diligence, reliability, and self-discipline",
+        "extracurricular":          "Engagement in activities outside formal academics",
+        "coding_interest":          "Interest and enthusiasm for programming and software development",
+        "biology_interest":         "Interest in biological sciences and life sciences",
+        "business_interest":        "Interest in business, commerce, and entrepreneurship",
+        "design_interest":          "Interest in visual design, UX, and creative aesthetics",
+        "teaching_interest":        "Interest in educating and mentoring others",
+        "research_interest":        "Drive to investigate, explore, and generate new knowledge",
+        "people_helping_interest":  "Motivation to support and improve others' wellbeing",
+        "entrepreneurship_interest": "Drive to create ventures and take calculated business risks",
     }
     return descs.get(feat, feat.replace("_", " ").title())
 
 
-# ── Entry point ────────────────────────────────────────────────────
 if __name__ == "__main__":
-    app = create_app()
-    port = int(os.getenv("PORT", 5050))
-    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    logger.info("Starting Career Prediction API on port %d", port)
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app  = create_app()
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
