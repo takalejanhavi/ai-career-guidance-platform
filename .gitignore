@@ -29,8 +29,10 @@ __pycache__/
 .venv/
 venv/
 
-# ── AI model artefacts (generated at build time) ────────────────────
-ai-service/models/artefacts/
+# ── AI model artefacts ──────────────────────────────────────────────
+# .joblib files are committed — they are the production deployment artefact.
+# The Docker image copies them directly; no training step runs at build time.
+# Current total: ~5 MB. Exclude the training dataset (regenerable, ~12k rows).
 ai-service/data/*.csv
 
 # ── Hardhat / Blockchain ──────────────────────────────────────────

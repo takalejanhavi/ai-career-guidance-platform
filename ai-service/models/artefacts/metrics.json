@@ -1,0 +1,21 @@
+{
+  "rf": {
+    "accuracy": 0.9551,
+    "f1_weighted": 0.9553,
+    "log_loss": 0.1402,
+    "cv_accuracy_mean": 0.9497,
+    "cv_accuracy_std": 0.0037
+  },
+  "xgb": {
+    "accuracy": 0.9591,
+    "f1_weighted": 0.9593,
+    "log_loss": 0.1152,
+    "cv_accuracy_mean": 0.955,
+    "cv_accuracy_std": 0.0044
+  },
+  "ensemble": {
+    "accuracy": 0.9571,
+    "f1_weighted": 0.9572,
+    "log_loss": 0.1217
+  }
+}
