@@ -18,6 +18,7 @@ const pdfService   = require('../services/pdf.service');
 const emailService = require('../services/email.service');
 const logger       = require('../config/logger');
 const AuditLog     = require('../modules/audit/auditlog.model');
+const env          = require('../config/env');
 
 // ─── PDF Workers ──────────────────────────────────────────────────────────────
 
@@ -112,36 +113,98 @@ Queues.PDF.process('generate-pdf', 2, async (job) => {
 
 // ─── Blockchain Worker ────────────────────────────────────────────────────────
 
+/**
+ * anchor-report
+ * =============
+ * Idempotent: safe to run multiple times for the same report.
+ *
+ * State machine:
+ *   not_anchored / failed  → broadcast new tx → save pending → wait → confirm
+ *   pending (has txHash)   → skip broadcast, recover receipt → confirm
+ *   confirmed              → return immediately (nothing to do)
+ *
+ * Why Bull retried before this fix:
+ *   The old code called anchorReport() (broadcast + wait in one shot). If the
+ *   120-second wait timed out, the catch block set status='failed' — discarding
+ *   the txHash. On the next Bull retry (attempts:3 in QUEUE_DEFAULTS), the
+ *   worker had no record of the pending tx and broadcast a second transaction.
+ *
+ * The fix: save txHash as status='pending' BEFORE calling waitForConfirmation().
+ * On any retry, the pending path detects the txHash and waits for / recovers
+ * the original transaction instead of broadcasting again.
+ */
 Queues.BLOCKCHAIN.process('anchor-report', 1, async (job) => {
   const { reportId, hash, userId } = job.data;
-  logger.info('[Worker:Blockchain] Anchoring report %s', reportId);
+  logger.info('[Worker:Blockchain] anchor-report start reportId=%s attempt=%s', reportId, job.attemptsMade + 1);
 
   const report = await Report.findById(reportId).populate('userId', '_id');
   if (!report) throw new Error(`Report ${reportId} not found`);
 
+  // ── Guard: already confirmed — nothing to do ──────────────────────────────
+  if (report.blockchain.status === 'confirmed') {
+    logger.info(
+      '[Worker:Blockchain] Already confirmed txHash=%s blockNumber=%d — skipping',
+      report.blockchain.txHash, report.blockchain.blockNumber
+    );
+    return;
+  }
+
   const pdfHash   = hash || report.pdf?.sha256Hash;
   if (!pdfHash) throw new Error(`Report ${reportId} has no pdf.sha256Hash to anchor`);
 
-  const studentId = String(report.userId._id || report.userId);
+  const studentId  = String(report.userId._id || report.userId);
+  const blockchain = require('../services/blockchain.service');
+
+  // Track whether we've already saved a pending txHash to Mongo.
+  // If true and something later throws, the next retry uses the recovery path
+  // (existing txHash) rather than broadcasting a new transaction.
+  let pendingSaved = report.blockchain.status === 'pending' && !!report.blockchain.txHash;
 
   try {
-    const blockchain = require('../services/blockchain.service');
-    const result = await blockchain.anchorReport({
-      reportId,
-      pdfHash,
-      studentId,
-      metadataURI: '',
-    });
+    let receipt;
+
+    if (pendingSaved) {
+      // ── Recovery path: pending txHash from a previous attempt ──────────────
+      // The first attempt broadcast successfully but timed out waiting for
+      // confirmation. Recover the receipt for the existing tx.
+      logger.info(
+        '[Worker:Blockchain] Recovering pending tx txHash=%s',
+        report.blockchain.txHash
+      );
+      receipt = await blockchain.waitForConfirmation(report.blockchain.txHash, 120_000);
+      logger.info('[Worker:Blockchain] Receipt received blockNumber=%d', receipt.blockNumber);
+
+    } else {
+      // ── Broadcast path: new transaction ────────────────────────────────────
+      const tx = await blockchain.broadcastAnchor({ reportId, pdfHash, studentId });
+      logger.info('[Worker:Blockchain] Broadcasted tx txHash=%s', tx.hash);
+
+      // Persist txHash BEFORE waiting for confirmation.
+      // If waitForConfirmation() times out or throws, the next Bull retry will
+      // enter the recovery path above instead of broadcasting a second tx.
+      report.markBlockchainPending(tx.hash, env.BLOCKCHAIN_NETWORK || 'polygon-amoy');
+      await report.save();
+      pendingSaved = true;
+      logger.info('[Worker:Blockchain] Pending state saved txHash=%s', tx.hash);
+
+      logger.info('[Worker:Blockchain] Waiting for confirmation...');
+      receipt = await blockchain.waitForConfirmation(tx.hash, 120_000);
+      logger.info('[Worker:Blockchain] Receipt received blockNumber=%d', receipt.blockNumber);
+    }
+
+    // ── Confirm ────────────────────────────────────────────────────────────
+    const blockTimestamp = await blockchain.getBlockTimestamp(receipt.blockNumber);
 
     report.confirmBlockchain({
-      txHash          : result.txHash,
-      contractAddress : result.contractAddress,
-      blockNumber     : result.blockNumber,
-      blockTimestamp  : new Date(result.blockTimestamp * 1000),
-      gasUsed         : result.gasUsed,
-      network         : result.network,
+      txHash          : receipt.hash,
+      contractAddress : env.CONTRACT_ADDRESS,
+      blockNumber     : receipt.blockNumber,
+      blockTimestamp  : new Date(blockTimestamp * 1000),
+      gasUsed         : receipt.gasUsed.toString(),
+      network         : env.BLOCKCHAIN_NETWORK || 'polygon-amoy',
     });
     await report.save();
+    logger.info('[Worker:Blockchain] Mongo updated status=confirmed txHash=%s', receipt.hash);
 
     await AuditLog.write({
       actorId     : userId,
@@ -150,16 +213,39 @@ Queues.BLOCKCHAIN.process('anchor-report', 1, async (job) => {
       resourceType: 'Report',
       resourceId  : report._id,
       outcome     : 'success',
-      metadata    : { txHash: result.txHash, network: result.network, blockNumber: result.blockNumber },
+      metadata    : { txHash: receipt.hash, network: env.BLOCKCHAIN_NETWORK, blockNumber: receipt.blockNumber },
     });
 
     await Queues.NOTIFICATION.add('blockchain-confirmed', { userId, reportId });
 
+    logger.info('[Worker:Blockchain] Job completed reportId=%s txHash=%s', reportId, receipt.hash);
+
   } catch (err) {
-    report.blockchain.status        = 'failed';
-    report.blockchain.failureReason = err.message;
-    report.blockchain.retryCount    = (report.blockchain.retryCount || 0) + 1;
-    await report.save();
+    logger.error(
+      '[Worker:Blockchain] Failed reportId=%s attempt=%d: %s\n%s',
+      reportId, job.attemptsMade + 1, err.message, err.stack
+    );
+
+    // If we haven't yet saved a pending txHash, the broadcast itself failed —
+    // mark 'failed' so the retry starts a fresh broadcast attempt.
+    // If we DID save a pending txHash, leave status='pending' so the next
+    // retry enters the recovery path and waits for the same tx (not a new one).
+    if (!pendingSaved) {
+      report.blockchain.status        = 'failed';
+      report.blockchain.failureReason = err.message;
+      report.blockchain.retryCount    = (report.blockchain.retryCount || 0) + 1;
+      await report.save().catch(saveErr =>
+        logger.error('[Worker:Blockchain] Failed to persist failure state: %s', saveErr.message)
+      );
+    } else {
+      // Keep status='pending'; just update retryCount + reason for observability.
+      report.blockchain.retryCount    = (report.blockchain.retryCount || 0) + 1;
+      report.blockchain.failureReason = err.message;
+      await report.save().catch(saveErr =>
+        logger.error('[Worker:Blockchain] Failed to update retryCount: %s', saveErr.message)
+      );
+    }
+
     await AuditLog.write({
       actorId     : userId,
       actorRole   : 'student',
@@ -167,9 +253,10 @@ Queues.BLOCKCHAIN.process('anchor-report', 1, async (job) => {
       resourceType: 'Report',
       resourceId  : report._id,
       outcome     : 'failure',
-      metadata    : { error: err.message },
-    });
-    throw err;
+      metadata    : { error: err.message, stack: err.stack, attempt: job.attemptsMade + 1 },
+    }).catch(() => {});
+
+    throw err; // Bull applies exponential backoff (attempts:3 in QUEUE_DEFAULTS)
   }
 });
 

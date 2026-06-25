@@ -122,9 +122,98 @@ async function _waitReceipt(tx) {
   return Promise.race([
     tx.wait(1),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Tx ${tx.hash} timed out`)), 60_000)
+      setTimeout(() => reject(new Error(`Tx ${tx.hash} timed out after 120s`)), 120_000)
     ),
   ]);
+}
+
+// ── Broadcast-only helper ───────────────────────────────────────────────────
+
+/**
+ * Broadcast registerReport() and return the TransactionResponse immediately.
+ * Does NOT wait for confirmation. The caller must persist tx.hash as
+ * blockchain.status='pending' BEFORE calling waitForConfirmation(), so that
+ * if the wait fails the retry can recover the existing tx instead of
+ * broadcasting a second one.
+ *
+ * @param {object} params
+ * @param {string} params.reportId   MongoDB ObjectId of the Report
+ * @param {string} params.pdfHash    SHA-256 hex hash of the PDF (64 chars)
+ * @returns {Promise<TransactionResponse>}
+ */
+async function broadcastAnchor({ reportId, pdfHash }) {
+  await _ensureConnected();
+  _requireSigner();
+
+  const reportIdBytes32 = encodeReportId(reportId);
+  const pdfHashBytes32  = encodePdfHash(pdfHash);
+
+  logger.info('[Blockchain] broadcastAnchor reportId=%s bytes32=%s', reportId, reportIdBytes32);
+
+  const opts = await _gasOptions(
+    _contract.registerReport.estimateGas.bind(_contract),
+    [reportIdBytes32, pdfHashBytes32]
+  );
+
+  return _contract.registerReport(reportIdBytes32, pdfHashBytes32, opts);
+}
+
+/**
+ * Wait for an already-broadcast tx to reach 1 confirmation, given only its hash.
+ * Used in the retry-recovery path where the TransactionResponse object is no
+ * longer in memory but the txHash was persisted to MongoDB.
+ *
+ * Fast path: if the tx is already mined (common on retry after timeout),
+ * getTransactionReceipt() returns immediately without polling.
+ *
+ * @param {string} txHash
+ * @param {number} [timeoutMs=120000]
+ * @returns {Promise<TransactionReceipt>}
+ */
+async function waitForConfirmation(txHash, timeoutMs = 120_000) {
+  await _ensureConnected();
+
+  // Fast path — tx may already be mined (e.g. the first attempt timed out but
+  // the tx was confirmed during the 60-second wait window).
+  const alreadyMined = await _provider.getTransactionReceipt(txHash).catch(() => null);
+  if (alreadyMined) {
+    logger.info('[Blockchain] waitForConfirmation: tx already mined blockNumber=%d', alreadyMined.blockNumber);
+    return alreadyMined;
+  }
+
+  // Slow path — tx is still pending. Fetch TransactionResponse so we can
+  // call .wait(1) on it.
+  const tx = await _provider.getTransaction(txHash);
+  if (!tx) {
+    throw new Error(`[Blockchain] Tx ${txHash} not found on network — may have been dropped from mempool`);
+  }
+
+  return Promise.race([
+    tx.wait(1),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`[Blockchain] Tx ${txHash} confirmation timed out after ${timeoutMs}ms`)),
+        timeoutMs
+      )
+    ),
+  ]);
+}
+
+/**
+ * Fetch block.timestamp for a mined block.
+ * Returns Unix epoch seconds; falls back to Date.now() if the block is unavailable.
+ *
+ * @param {number} blockNumber
+ * @returns {Promise<number>}
+ */
+async function getBlockTimestamp(blockNumber) {
+  await _ensureConnected();
+  try {
+    const block = await _provider.getBlock(blockNumber);
+    return block ? Number(block.timestamp) : Math.floor(Date.now() / 1000);
+  } catch {
+    return Math.floor(Date.now() / 1000);
+  }
 }
 
 // ── Core API ────────────────────────────────────────────────────────────────
@@ -140,30 +229,16 @@ async function _waitReceipt(tx) {
  * @returns {object}  { txHash, contractAddress, blockNumber, blockTimestamp, gasUsed, network }
  */
 async function anchorReport({ reportId, pdfHash, studentId, metadataURI = '' }) {
-  await _ensureConnected();
-  _requireSigner();
-
-  const reportIdBytes32  = encodeReportId(reportId);
-  const pdfHashBytes32   = encodePdfHash(pdfHash);
-  const studentIdBytes32 = encodeStudentId(studentId);
+  const reportIdBytes32 = encodeReportId(reportId);
 
   logger.info('[Blockchain] anchorReport reportId=%s bytes32=%s', reportId, reportIdBytes32);
 
-  const opts = await _gasOptions(
-    _contract.registerReport.estimateGas.bind(_contract),
-    [reportIdBytes32, pdfHashBytes32]
-  );
-
-  const tx      = await _contract.registerReport(reportIdBytes32, pdfHashBytes32, opts);
+  const tx = await broadcastAnchor({ reportId, pdfHash });
   logger.info('[Blockchain] Broadcast txHash=%s', tx.hash);
 
   const receipt = await _waitReceipt(tx);
 
-  let blockTimestamp = Math.floor(Date.now() / 1000);
-  try {
-    const block = await _provider.getBlock(receipt.blockNumber);
-    if (block) blockTimestamp = Number(block.timestamp);
-  } catch { /* non-critical */ }
+  const blockTimestamp = await getBlockTimestamp(receipt.blockNumber);
 
   logger.info('[Blockchain] Confirmed txHash=%s block=%d', receipt.hash, receipt.blockNumber);
 
@@ -310,7 +385,7 @@ const MINIMAL_ABI = [
 ];
 
 module.exports = {
-  connect, anchorReport, verifyIntegrity, updateReportHash,
-  revokeOnChain, getOnChainRecord, healthCheck,
+  connect, anchorReport, broadcastAnchor, waitForConfirmation, getBlockTimestamp,
+  verifyIntegrity, updateReportHash, revokeOnChain, getOnChainRecord, healthCheck,
   encodeReportId, encodePdfHash, encodeStudentId,
 };
