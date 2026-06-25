@@ -1,13 +1,25 @@
-# Production inference dependencies only.
-# DO NOT add shap, imbalanced-learn, pytest, scipy, or marshmallow here —
-# those are training/dev tools that add 200+ MB to the image and are never
-# called during inference.
+# Production inference dependencies.
+#
+# CRITICAL: these versions MUST match the environment used to train the
+# serialized .joblib artifacts.  Mismatches cause silent or hard failures:
+#
+#   sklearn  < 1.4  → serialize trees without monotonic_cst
+#   sklearn >= 1.4  → predict_proba reads tree.monotonic_cst → AttributeError
+#
+#   xgboost 2.x vs 3.x → booster binary format incompatible
+#
+# Current artifact training environment (verified 2026-06-25):
+#   scikit-learn 1.3.0 | xgboost 3.2.0 | numpy 1.24.3 | joblib 1.3.2
+#
+# If you retrain locally, run `python -c "import sklearn,xgboost,numpy,joblib;
+# print(sklearn.__version__, xgboost.__version__, numpy.__version__, joblib.__version__)"
+# and update the pins below before committing artifacts.
 
-numpy==1.26.4
+numpy==1.24.3
 pandas==2.2.2
-scikit-learn==1.5.0
-xgboost==2.0.3
-joblib==1.4.2
+scikit-learn==1.3.0
+xgboost==3.2.0
+joblib==1.3.2
 flask==3.0.3
 flask-cors==4.0.1
 gunicorn==22.0.0

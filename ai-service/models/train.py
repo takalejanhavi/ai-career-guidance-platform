@@ -324,18 +324,26 @@ def train(n_samples: int = 12_000, tune: bool = True, verbose: bool = True) -> d
     artefacts["metrics"].write_text(json.dumps(metrics, indent=2))
     importance_df.to_csv(artefacts["importance"], index=False)
 
+    import sklearn as _sklearn
+    import xgboost as _xgboost
     from datetime import datetime, timezone
     version_meta = {
-        "version":          "1.1.0",
-        "training_date":    datetime.now(timezone.utc).isoformat(),
-        "feature_count":    X_eng.shape[1],
+        "version":           "1.1.0",
+        "training_date":     datetime.now(timezone.utc).isoformat(),
+        "feature_count":     X_eng.shape[1],
         "raw_feature_count": len(FEATURES),
-        "n_classes":        n_classes,
-        "ensemble_weights": {"rf": 0.45, "xgb": 0.55},
-        "accuracy":         metrics["ensemble"]["accuracy"],
-        "f1":               metrics["ensemble"]["f1_weighted"],
-        "log_loss":         metrics["ensemble"]["log_loss"],
-        "n_samples":        len(df),
+        "n_classes":         n_classes,
+        "ensemble_weights":  {"rf": 0.45, "xgb": 0.55},
+        "accuracy":          metrics["ensemble"]["accuracy"],
+        "f1":                metrics["ensemble"]["f1_weighted"],
+        "log_loss":          metrics["ensemble"]["log_loss"],
+        "n_samples":         len(df),
+        # Serialization compatibility fingerprint.
+        # predict.py compares these at load time and warns on mismatch.
+        "sklearn_version":   _sklearn.__version__,
+        "xgboost_version":   _xgboost.__version__,
+        "numpy_version":     np.__version__,
+        "joblib_version":    joblib.__version__,
     }
     artefacts["version"].write_text(json.dumps(version_meta, indent=2))
 

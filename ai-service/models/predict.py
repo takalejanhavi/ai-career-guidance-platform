@@ -36,6 +36,76 @@ _logger    = logging.getLogger("career_predictor")
 _load_lock = threading.Lock()   # guards singleton initialisation
 
 
+# ── Cross-version compatibility shim ──────────────────────────────
+# sklearn 1.4.0 added `monotonic_cst` to DecisionTreeClassifier.
+# Models trained with sklearn <= 1.3.x don't have the attribute, but
+# sklearn >= 1.4.x predict_proba accesses it at the Python level and
+# raises AttributeError.  We patch loaded trees after deserialisation.
+# The correct value for unconstrained trees is None (same default as
+# sklearn 1.4+ when the parameter is not supplied).
+
+def _patch_sklearn_compat(clf) -> int:
+    """
+    Walk clf and add missing `monotonic_cst = None` to every
+    DecisionTreeClassifier that pre-dates sklearn 1.4.
+
+    Returns the number of trees patched (0 if none needed).
+    """
+    patched = 0
+    # CalibratedClassifierCV wraps one or more _CalibratedClassifier objects
+    if hasattr(clf, "calibrated_classifiers_"):
+        for cc in clf.calibrated_classifiers_:
+            patched += _patch_sklearn_compat(getattr(cc, "estimator", cc))
+    # RandomForestClassifier / ExtraTreesClassifier
+    if hasattr(clf, "estimators_"):
+        for tree in clf.estimators_:
+            if not hasattr(tree, "monotonic_cst"):
+                tree.monotonic_cst = None
+                patched += 1
+    return patched
+
+
+def _check_version_compat(version_meta: dict) -> None:
+    """
+    Log a WARNING if the installed sklearn / xgboost versions differ from
+    those used to train the serialized artifacts.  A mismatch here is the
+    root cause of AttributeError / booster-format crashes at predict time.
+    """
+    import sklearn as _sk
+    try:
+        import xgboost as _xgb
+        xgb_installed = _xgb.__version__
+    except ImportError:
+        xgb_installed = "unknown"
+
+    sk_trained  = version_meta.get("sklearn_version",  "unknown")
+    xgb_trained = version_meta.get("xgboost_version", "unknown")
+
+    if sk_trained != "unknown" and _sk.__version__ != sk_trained:
+        _logger.warning(
+            "[compat] sklearn version mismatch — "
+            "artifacts trained with %s, runtime has %s.  "
+            "This can cause AttributeError during predict_proba.  "
+            "Retrain with `python models/train.py` or pin scikit-learn==%s.",
+            sk_trained, _sk.__version__, sk_trained,
+        )
+    else:
+        _logger.info("[compat] sklearn OK — trained=%s runtime=%s",
+                     sk_trained, _sk.__version__)
+
+    if xgb_trained != "unknown" and xgb_installed != xgb_trained:
+        _logger.warning(
+            "[compat] xgboost version mismatch — "
+            "artifacts trained with %s, runtime has %s.  "
+            "Booster format may be incompatible.  "
+            "Retrain or pin xgboost==%s.",
+            xgb_trained, xgb_installed, xgb_trained,
+        )
+    else:
+        _logger.info("[compat] xgboost OK — trained=%s runtime=%s",
+                     xgb_trained, xgb_installed)
+
+
 # ── Memory diagnostic helper ───────────────────────────────────────
 def _log_mem(label: str) -> None:
     """Log current process RSS.  Never raises — diagnostic only."""
@@ -357,11 +427,31 @@ class CareerPredictor:
         self._le = joblib.load(MODEL_DIR / "label_encoder.joblib")
         _log_mem("after feature_engineer + label_encoder")
 
+        # Load version metadata first so we can compare against runtime packages
+        # before deserialising the models (catches the mismatch early in logs).
+        version_path = MODEL_DIR / "version.json"
+        if version_path.exists():
+            self._version_meta = json.loads(version_path.read_text())
+            self.model_version = self._version_meta.get("version", "1.0.0")
+        else:
+            self._version_meta = {}
+        _check_version_compat(self._version_meta)
+
         _logger.info("Loading random_forest (%.1f MB)…",
                      (MODEL_DIR / "random_forest.joblib").stat().st_size / 1_048_576)
         t0 = time.perf_counter()
         self._rf = joblib.load(MODEL_DIR / "random_forest.joblib")
         _logger.info("RF loaded in %.1fs", time.perf_counter() - t0)
+        # Shim: sklearn >= 1.4 expects monotonic_cst on every DecisionTree.
+        # Trees trained with sklearn <= 1.3 don't have it; patch them now so
+        # predict_proba never raises AttributeError regardless of runtime version.
+        n_patched = _patch_sklearn_compat(self._rf)
+        if n_patched:
+            _logger.info(
+                "[compat] patched %d RF trees with monotonic_cst=None "
+                "(artifact trained with sklearn < 1.4)",
+                n_patched,
+            )
         _log_mem("after random_forest")
 
         _logger.info("Loading xgboost (%.1f MB)…",
@@ -373,13 +463,6 @@ class CareerPredictor:
 
         self._classes    = json.loads((MODEL_DIR / "class_names.json").read_text())
         self._feat_names = json.loads((MODEL_DIR / "feature_names.json").read_text())
-
-        version_path = MODEL_DIR / "version.json"
-        if version_path.exists():
-            self._version_meta = json.loads(version_path.read_text())
-            self.model_version = self._version_meta.get("version", "1.0.0")
-        else:
-            self._version_meta = {}
 
         self._loaded = True
         elapsed = time.perf_counter() - t_start
