@@ -88,3 +88,5 @@ module.exports = {
   hashToken,
   refreshCookieOptions,
 };
+console.log('PRIVATE KEY START:', PRIVATE_KEY.slice(0, 50));
+console.log('PUBLIC KEY START:', PUBLIC_KEY.slice(0, 50));
