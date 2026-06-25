@@ -12,9 +12,15 @@ function handleCastError(err) {
 }
 
 function handleDuplicateKeyError(err) {
+  console.log('DUPLICATE ERROR FULL:', err);
+
   const field = Object.keys(err.keyValue || {})[0] || 'field';
   const value = err.keyValue?.[field];
-  return AppError.conflict(`${field} '${value}' is already in use`, 'DUPLICATE_VALUE');
+
+  return AppError.conflict(
+    `${field} '${value}' is already in use`,
+    'DUPLICATE_VALUE'
+  );
 }
 
 function handleValidationError(err) {
