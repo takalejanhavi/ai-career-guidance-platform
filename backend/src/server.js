@@ -5,6 +5,7 @@ require('./config/env');
 
 const app              = require('./app');
 const { connectDB, disconnectDB } = require('./config/database');
+const { closeRedis }              = require('./config/redis');
 const logger           = require('./config/logger');
 const env              = require('./config/env');
 
@@ -43,12 +44,14 @@ async function gracefulShutdown(code = 0) {
   if (server) {
     server.close(async () => {
       await disconnectDB();
+      await closeRedis();
       logger.info('Server closed');
       process.exit(code);
     });
     // Force close after 10s
     setTimeout(() => process.exit(code), 10000).unref();
   } else {
+    await closeRedis();
     process.exit(code);
   }
 }
