@@ -8,16 +8,31 @@ const { authorize }    = require('../../middleware/rbac.middleware');
 const { validate, idParamSchema } = require('../../middleware/validate');
 const { objectIdSchema } = require('../../middleware/validate');
 
+// Accepts YYYY-MM-DD (HTML date input), full ISO datetime, or absent/empty.
+// z.string().datetime() required a full UTC ISO string — HTML <input type="date">
+// sends "YYYY-MM-DD" (no time) or "" (when blank), both of which fail datetime().
+// z.preprocess normalises "" → undefined before the coerce step.
+const dateOrUndefined = z.preprocess(
+  v => (v === '' || v == null) ? undefined : v,
+  z.coerce.date().optional()
+);
+
+// Nullable variant for PATCH: explicit null clears the expiry; "" also clears it.
+const dateOrNullOrUndefined = z.preprocess(
+  v => (v === '') ? null : v == null ? undefined : v,
+  z.union([z.null(), z.coerce.date()]).optional()
+);
+
 const grantSchema = z.object({
   grantedToEmail : z.string().email(),
   permissions    : z.array(z.enum(['view','download','annotate','print'])).min(1),
-  expiresAt      : z.string().datetime().optional(),
+  expiresAt      : dateOrUndefined,
   shareMessage   : z.string().max(1000).optional(),
 });
 
 const updateSchema = z.object({
   permissions : z.array(z.enum(['view','download','annotate','print'])).min(1).optional(),
-  expiresAt   : z.string().datetime().nullable().optional(),
+  expiresAt   : dateOrNullOrUndefined,
 });
 
 const revokeSchema = z.object({ reason: z.string().max(500).optional() });

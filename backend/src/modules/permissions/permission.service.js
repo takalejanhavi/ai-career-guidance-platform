@@ -17,6 +17,13 @@ async function grantPermission(reportId, ownerId, { grantedToEmail, permissions,
   const grantee = await User.findByEmail(grantedToEmail);
   if (!grantee) throw AppError.notFound('User with that email');
   if (String(grantee._id) === String(ownerId)) throw AppError.badRequest('You cannot share a report with yourself');
+  if (!grantee.isEmailVerified) {
+    throw new AppError(
+      'Psychologist must verify their email before report sharing.',
+      422,
+      'EMAIL_NOT_VERIFIED'
+    );
+  }
 
   // Upsert permission
   const perm = await Permission.findOneAndUpdate(
