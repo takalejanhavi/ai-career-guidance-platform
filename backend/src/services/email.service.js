@@ -1,31 +1,39 @@
 'use strict';
 
-const { Resend } = require('resend');
+const nodemailer = require('nodemailer');
 const env    = require('../config/env');
 const logger = require('../config/logger');
 
-// ─── Client ───────────────────────────────────────────────────────────────────
+// ─── Transport ────────────────────────────────────────────────────────────────
 
-const resend = new Resend(env.RESEND_API_KEY);
+const transporter = nodemailer.createTransport({
+  host   : env.SMTP_HOST,
+  port   : Number(env.SMTP_PORT),
+  secure : Number(env.SMTP_PORT) === 465,
+  auth   : { user: env.SMTP_USER, pass: env.SMTP_PASS },
+});
+
+// Verify connection on startup (non-blocking)
+transporter
+  .verify()
+  .then(() => logger.info('SMTP connection verified'))
+  .catch(err => logger.warn('SMTP verify failed', {
+    error:   err.message,
+    code:    err.code,
+    command: err.command,
+  }));
 
 // ─── Send helper ──────────────────────────────────────────────────────────────
 
 async function send({ to, subject, html, text }) {
-  const { data, error } = await resend.emails.send({
-    from: env.EMAIL_FROM,
-    to,
-    subject,
-    html,
-    text,
-  });
-
-  if (error) {
-    logger.error('Email send failed', { to, subject, error: error.message, response: error });
-    throw new Error(error.message);
+  try {
+    const info = await transporter.sendMail({ from: env.EMAIL_FROM, to, subject, html, text });
+    logger.info('Email sent', { to, subject, messageId: info.messageId });
+    return info;
+  } catch (err) {
+    logger.error('Email send failed', { to, subject, error: err.message });
+    throw err;
   }
-
-  logger.info('Email sent', { to, subject, id: data?.id });
-  return data;
 }
 
 // ─── Templates ────────────────────────────────────────────────────────────────
