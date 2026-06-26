@@ -14,12 +14,19 @@ const transport = nodemailer.createTransport({
 });
 
 // Verify connection on startup (non-blocking)
-logger.warn("SMTP verify failed", {
-  message: err.message,
-  code: err.code,
-  command: err.command,
-  response: err.response,
-});
+transport
+  .verify()
+  .then(() => {
+    logger.info("SMTP connection verified");
+  })
+  .catch((err) => {
+    logger.warn("SMTP verify failed", {
+      message: err.message,
+      code: err.code,
+      command: err.command,
+      response: err.response,
+    });
+  });
 // ─── Send helper ──────────────────────────────────────────────────────────────
 
 async function send({ to, subject, html, text }) {
