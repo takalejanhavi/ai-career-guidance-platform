@@ -50,7 +50,7 @@ export default function Sidebar() {
               transition={{ duration: 0.2 }}
               className="font-display font-bold text-lg gradient-text whitespace-nowrap"
             >
-              CareerAI
+              MentorChain
             </motion.span>
           )}
         </AnimatePresence>

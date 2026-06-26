@@ -299,7 +299,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "✅ *CareerAI Production Deploy* — `${{ needs.setup.outputs.sha_short }}`\n*Deployed by:* ${{ github.actor }}\n*URL:* https://careerguidance.app"
+                    "text": "✅ *MentorChain Production Deploy* — `${{ needs.setup.outputs.sha_short }}`\n*Deployed by:* ${{ github.actor }}\n*URL:* https://mentorchain.app"
                   }
                 }
               ]

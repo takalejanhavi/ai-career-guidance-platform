@@ -16,7 +16,7 @@ const path = require('path');
 
 async function main() {
   console.log('\n╔══════════════════════════════════════════════════════╗');
-  console.log('║   CareerAI Blockchain — Deployment Script            ║');
+  console.log('║   MentorChain Blockchain — Deployment Script         ║');
   console.log('╚══════════════════════════════════════════════════════╝\n');
 
   // ── Signers ───────────────────────────────────────────────────

@@ -34,7 +34,7 @@ export default function LandingPage() {
             <div className="w-9 h-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-glow-sm">
               <Zap className="w-5 h-5 text-white" strokeWidth={2.5} />
             </div>
-            <span className="text-xl font-display font-bold gradient-text">CareerAI</span>
+            <span className="text-xl font-display font-bold gradient-text">MentorChain</span>
           </Link>
           <div className="flex items-center gap-3">
             <Link to="/login" className="btn-ghost text-sm">Sign in</Link>
@@ -228,7 +228,7 @@ export default function LandingPage() {
             <div className="relative z-10">
               <CheckCircle2 className="w-12 h-12 text-indigo-400 mx-auto mb-4" />
               <h2 className="text-3xl font-display font-bold mb-3">Ready to find your path?</h2>
-              <p className="text-secondary mb-8">Join 50,000+ students who discovered their ideal career with CareerAI.</p>
+              <p className="text-secondary mb-8">Join 50,000+ students who discovered their ideal career with MentorChain.</p>
               <Link to="/register" className="btn-brand text-base py-3 px-8">
                 Start for free — it takes 30 min
                 <ArrowRight className="w-5 h-5" />
@@ -243,7 +243,7 @@ export default function LandingPage() {
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-muted">
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-indigo-400" />
-            <span>CareerAI © {new Date().getFullYear()}</span>
+            <span>MentorChain © {new Date().getFullYear()}</span>
           </div>
           <div className="flex gap-6">
             <a href="#" className="hover:text-secondary transition-colors">Privacy</a>

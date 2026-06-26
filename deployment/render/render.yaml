@@ -68,7 +68,7 @@ services:
       - key:   SMTP_PASS
         sync:  false
       - key:   EMAIL_FROM
-        value: "CareerAI <noreply@careerguidance.app>"
+        value: "MentorChain <noreply@mentorchain.app>"
       - key:   S3_ENDPOINT
         value: https://s3.amazonaws.com
       - key:   S3_BUCKET
@@ -221,7 +221,7 @@ services:
       - key:   SMTP_PASS
         sync:  false
       - key:   EMAIL_FROM
-        value: "CareerAI <noreply@careerguidance.app>"
+        value: "MentorChain <noreply@mentorchain.app>"
       - key:   FRONTEND_URL
         value: https://careerguidance.app
       - key:   S3_ENDPOINT

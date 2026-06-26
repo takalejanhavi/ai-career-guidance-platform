@@ -20,7 +20,7 @@ error()  { echo -e "  ${RED}✗${NC} $1"; }
 case "$CMD" in
 
   up)
-    header "Starting CareerAI Development Stack"
+    header "Starting MentorChain Development Stack"
 
     # Check prerequisites
     command -v docker &>/dev/null || { error "Docker not found"; exit 1; }

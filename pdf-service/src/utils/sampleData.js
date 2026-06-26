@@ -172,7 +172,7 @@ const SAMPLE_REPORT = {
     id:          'RPT-2024-77341',
     title:       'Career Guidance Report',
     generatedAt: new Date().toISOString(),
-    platform:    'CareerAI Platform',
+    platform:    'MentorChain',
     version:     '1.0.0',
   },
 };

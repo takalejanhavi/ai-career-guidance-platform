@@ -48,10 +48,10 @@ class ReportGenerator {
         autoFirstPage: false,
         info: {
           Title:    `${validatedData.report.title} — ${validatedData.student.firstName} ${validatedData.student.lastName}`,
-          Author:   validatedData.psychologist?.name || 'CareerAI Platform',
-          Subject:  'Career Guidance Report',
-          Keywords: 'career guidance, psychometric assessment, AI recommendations',
-          Creator:  'CareerAI PDF Service v1.0.0',
+          Author:   validatedData.psychologist?.name || 'MentorChain',
+          Subject:  'MentorChain Career Report',
+          Keywords: 'mentorchain, psychometric assessment, AI recommendations',
+          Creator:  'MentorChain PDF Service v1.0.0',
           Producer: 'PDFKit',
         },
       });
@@ -136,9 +136,9 @@ class ReportGenerator {
       ...data,
       report: {
         id:          `RPT-${Date.now()}`,
-        title:       'Career Guidance Report',
+        title:       'MentorChain Career Report',
         generatedAt: now,
-        platform:    'CareerAI Platform',
+        platform:    'MentorChain',
         version:     '1.0.0',
         ...(data.report || {}),
       },

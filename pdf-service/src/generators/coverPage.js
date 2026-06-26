@@ -43,20 +43,20 @@ function renderCoverPage(doc, data) {
   doc.save()
     .font(FONTS.bold).fontSize(18)
     .fillColor(COLORS.white)
-    .text('CareerAI', lx + 44, ly + 8, { lineBreak: false })
+    .text('MentorChain', lx + 44, ly + 8, { lineBreak: false })
     .restore();
 
   doc.save()
     .font(FONTS.regular).fontSize(8.5)
     .fillColor('rgba(255,255,255,0.6)')
-    .text('AI-Powered Career Guidance Platform', lx + 44, ly + 28, { lineBreak: false })
+    .text('AI-Powered MentorChain Platform', lx + 44, ly + 28, { lineBreak: false })
     .restore();
 
   // ── Report title ──────────────────────────────────────────────
   doc.save()
     .font(FONTS.bold).fontSize(28)
     .fillColor(COLORS.white)
-    .text('Career Guidance', marginX, 82, { lineBreak: false })
+    .text('MentorChain', marginX, 82, { lineBreak: false })
     .restore();
 
   doc.save()

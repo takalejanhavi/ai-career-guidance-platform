@@ -31,12 +31,12 @@ accesslog        = "-"
 errorlog         = "-"
 access_log_format = '%(h)s "%(r)s" %(s)s %(b)s %(D)sus'
 
-proc_name        = "career-ai-service"
+proc_name        = "mentor-chain-service"
 
 
 def on_starting(server):
     server.log.info(
-        "Career AI Service starting — "
+        "MentorChain AI Service starting — "
         "1 worker × %s threads (gthread), timeout=%ss",
         os.getenv("THREADS", "2"),
         os.getenv("TIMEOUT", "120"),

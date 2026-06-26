@@ -42,7 +42,7 @@ export default function LoginPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-display font-bold text-primary">Welcome back</h1>
-        <p className="text-sm text-muted mt-1">Sign in to your CareerAI account</p>
+        <p className="text-sm text-muted mt-1">Sign in to your MentorChain account</p>
       </div>
 
       <form onSubmit={handleSubmit(d => loginMut.mutate(d))} className="space-y-4">

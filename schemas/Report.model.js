@@ -117,7 +117,7 @@ const ReportSchema = new Schema(
     // ── Title & Display ───────────────────────────────────────────────────────
     title: {
       type     : String,
-      default  : 'Career Guidance Report',
+      default  : 'MentorChain Career Report',
       maxlength: 200,
       trim     : true,
     },

@@ -6,7 +6,7 @@ const { z } = require('zod');
 const envSchema = z.object({
   NODE_ENV:    z.enum(['development', 'test', 'production']).default('development'),
   PORT:        z.coerce.number().default(4000),
-  APP_NAME:    z.string().default('Career Guidance API'),
+  APP_NAME:    z.string().default('MentorChain API'),
   FRONTEND_URL: z.string().url().optional(),
 
   MONGODB_URI: z.string().min(10),

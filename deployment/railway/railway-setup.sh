@@ -15,7 +15,7 @@ set -euo pipefail
 ENV=${1:-staging}
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "  CareerAI — Railway Setup: $ENV"
+echo "  MentorChain — Railway Setup: $ENV"
 echo "═══════════════════════════════════════════════════════"
 echo ""
 
@@ -56,7 +56,7 @@ railway variables set \
   SMTP_HOST=smtp.resend.com \
   SMTP_PORT=465 \
   SMTP_USER=resend \
-  EMAIL_FROM="CareerAI <noreply@careerguidance.app>" \
+  EMAIL_FROM="MentorChain <noreply@mentorchain.app>" \
   S3_ENDPOINT=https://s3.amazonaws.com \
   S3_BUCKET="career-guidance-reports-${ENV}" \
   S3_REGION=us-east-1 \

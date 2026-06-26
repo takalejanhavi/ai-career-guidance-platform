@@ -13,7 +13,7 @@ async function send({ to, subject, html, text }) {
 
   const payload = {
     sender: {
-      name:  'Career Guidance',
+      name:  'MentorChain',
       email: env.EMAIL_FROM_ADDRESS,
     },
     to:          [{ email: to }],
@@ -53,7 +53,7 @@ const BASE = (content) => `
 
 <div style="background:#6C63FF;padding:20px;border-radius:8px 8px 0 0;text-align:center">
 <h1 style="color:#fff;margin:0;font-size:22px">
-Career Guidance Platform
+MentorChain
 </h1>
 </div>
 
@@ -62,7 +62,7 @@ ${content}
 </div>
 
 <p style="font-size:11px;color:#999;text-align:center;margin-top:20px">
-You received this email because you have an account on Career Guidance Platform.
+You received this email because you have an account on MentorChain.
 </p>
 
 </body>
@@ -74,7 +74,7 @@ async function sendVerificationEmail({ email, token, firstName }) {
 
   return send({
     to: email,
-    subject: 'Verify your email — Career Guidance',
+    subject: 'Verify your email — MentorChain',
     html: BASE(`
       <h2>Hi ${firstName},</h2>
 
@@ -99,7 +99,7 @@ async function sendPasswordResetEmail({ email, token, firstName }) {
 
   return send({
     to: email,
-    subject: 'Reset your password — Career Guidance',
+    subject: 'Reset your password — MentorChain',
     html: BASE(`
       <h2>Hi ${firstName},</h2>
 

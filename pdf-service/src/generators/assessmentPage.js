@@ -173,7 +173,7 @@ function _renderPageHeader(doc, title, pageLabel, data) {
   doc.save()
     .font(FONTS.bold).fontSize(9)
     .fillColor(COLORS.indigo)
-    .text('CareerAI', marginX, marginY + 8, { lineBreak: false })
+    .text('MentorChain', marginX, marginY + 8, { lineBreak: false })
     .restore();
 
   doc.save()

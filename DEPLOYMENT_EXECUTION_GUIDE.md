@@ -1,5 +1,5 @@
 # DEPLOYMENT_EXECUTION_GUIDE.md
-## CareerAI Platform — Step-by-Step Execution Guide
+## MentorChain Platform — Step-by-Step Execution Guide
 _Assumes: code is complete (per audit cycle ending 2026-06-11). This guide is for the first live execution of the stack._
 
 Each step provides: the exact command(s), expected output, success criteria, failure diagnosis, and recovery steps. Run steps in order — later steps depend on earlier ones succeeding.

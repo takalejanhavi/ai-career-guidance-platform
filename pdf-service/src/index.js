@@ -11,7 +11,7 @@ const { SAMPLE_REPORT }   = require('./utils/sampleData');
 
 async function main() {
   console.log('\n╔══════════════════════════════════════════════╗');
-  console.log('║   CareerAI PDF Report Generator v1.0.0       ║');
+  console.log('║   MentorChain PDF Report Generator v1.0.0    ║');
   console.log('╚══════════════════════════════════════════════╝\n');
 
   const generator  = new ReportGenerator();

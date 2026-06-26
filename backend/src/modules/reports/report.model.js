@@ -43,7 +43,7 @@ const AnnotationSchema = new Schema({
 const ReportSchema = new Schema({
   userId       : { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   assessmentId : { type: Schema.Types.ObjectId, ref: 'Assessment', required: true },
-  title        : { type: String, default: 'Career Guidance Report', maxlength: 200 },
+  title        : { type: String, default: 'MentorChain Career Report', maxlength: 200 },
   status       : { type: String, enum: ['generating','ready','failed','archived'], default: 'generating', index: true },
   generationError: { type: String, maxlength: 1000, default: null },
   visibility   : { type: String, enum: ['private','shared','public'], default: 'private', index: true },

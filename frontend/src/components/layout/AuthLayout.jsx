@@ -27,7 +27,7 @@ export default function AuthLayout({ children }) {
           <div className="w-10 h-10 rounded-xl bg-brand-gradient flex items-center justify-center shadow-glow-sm">
             <Zap className="w-6 h-6 text-white" strokeWidth={2.5} />
           </div>
-          <span className="text-2xl font-display font-bold gradient-text">CareerAI</span>
+          <span className="text-2xl font-display font-bold gradient-text">MentorChain</span>
         </Link>
 
         {/* Card */}

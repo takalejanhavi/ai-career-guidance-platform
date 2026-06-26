@@ -203,9 +203,9 @@ function buildReportData(report, psychologistDoc = null) {
   // ── Report metadata ────────────────────────────────────────────────────────
   const reportMeta = {
     id         : String(report._id),
-    title      : report.title || 'Career Guidance Report',
+    title      : report.title || 'MentorChain Career Report',
     generatedAt: new Date().toISOString(),
-    platform   : 'CareerAI Platform',
+    platform   : 'MentorChain',
     version    : '1.0.0',
   };
 

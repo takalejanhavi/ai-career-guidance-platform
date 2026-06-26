@@ -1,9 +1,9 @@
-# API Contracts — AI Integration Fix
-## CareerAI Platform
+﻿# API Contracts â€” AI Integration Fix
+## MentorChain
 
 ---
 
-## 1. Internal Contract: Backend ↔ AI Service
+## 1. Internal Contract: Backend â†” AI Service
 
 ### `POST {AI_SERVICE_URL}/predict/explain`
 
@@ -69,16 +69,16 @@ All 10 `AI_RAW_FEATURES` are required, each 0-100. `top_n` is optional (AI servi
 
 **Notes:**
 - `model_info` is **not** present in `/predict/explain` responses (only in `/predict`). `aiClient` defaults `modelVersion` to `'1.0.0'` when absent.
-- `top_drivers[].feature` may be a raw feature (`math_score`) or an **engineered** feature (`stem_vs_social_ratio`, `social_aptitude`, etc.) — both are mapped to dimensions via `FEATURE_TO_DIMENSION` + `ENGINEERED_FEATURE_TO_DIMENSION`.
+- `top_drivers[].feature` may be a raw feature (`math_score`) or an **engineered** feature (`stem_vs_social_ratio`, `social_aptitude`, etc.) â€” both are mapped to dimensions via `FEATURE_TO_DIMENSION` + `ENGINEERED_FEATURE_TO_DIMENSION`.
 - `salary_range` is an object `{min, max, currency}`, not a tuple.
-- No per-career `rf_confidence`/`xgb_confidence` — `rfScore`/`xgbScore` in the mapped output are **derived approximations** from `confidence_pct` and `model_agreement`.
+- No per-career `rf_confidence`/`xgb_confidence` â€” `rfScore`/`xgbScore` in the mapped output are **derived approximations** from `confidence_pct` and `model_agreement`.
 
 **Error responses** (unchanged from existing AI service):
 | Status | Meaning | aiClient behavior |
 |---|---|---|
-| 400 | Malformed JSON / missing body | No retry — `AIServiceError` thrown immediately |
-| 401 | Missing/invalid `X-Internal-Token` | No retry — `AIServiceError` thrown immediately |
-| 422 | Input validation failed (feature out of 0-100 range) | No retry — `AIServiceError` thrown immediately |
+| 400 | Malformed JSON / missing body | No retry â€” `AIServiceError` thrown immediately |
+| 401 | Missing/invalid `X-Internal-Token` | No retry â€” `AIServiceError` thrown immediately |
+| 422 | Input validation failed (feature out of 0-100 range) | No retry â€” `AIServiceError` thrown immediately |
 | 503 | Model not loaded | Retried up to 2x with exponential backoff (500ms, 1000ms) |
 | Network error / timeout | AI service unreachable | Retried up to 2x with exponential backoff |
 
@@ -88,14 +88,14 @@ All 10 `AI_RAW_FEATURES` are required, each 0-100. `top_n` is optional (AI servi
 
 All endpoints below are mounted at `/api/v1/assessments` and require `Authorization: Bearer <accessToken>`.
 
-### `POST /assessments/:id/submit` — unchanged signature, new internal behavior
+### `POST /assessments/:id/submit` â€” unchanged signature, new internal behavior
 
 **Request:** (unchanged)
 ```
 POST /api/v1/assessments/65f.../submit
 ```
 
-**Response:** (unchanged — 200 OK)
+**Response:** (unchanged â€” 200 OK)
 ```json
 {
   "success": true,
@@ -104,11 +104,11 @@ POST /api/v1/assessments/65f.../submit
 }
 ```
 
-**What changed internally:** scoring now succeeds. Previously, `assessment.status` would transition `submitted` → `failed` within seconds (404 from `/recommend`). Now it transitions `submitted` → `scored`, with `assessment.scores`, `assessment.aiMetadata`, and a generated `Report` document populated correctly.
+**What changed internally:** scoring now succeeds. Previously, `assessment.status` would transition `submitted` â†’ `failed` within seconds (404 from `/recommend`). Now it transitions `submitted` â†’ `scored`, with `assessment.scores`, `assessment.aiMetadata`, and a generated `Report` document populated correctly.
 
 ---
 
-### `GET /assessments/:id` — new fields in response
+### `GET /assessments/:id` â€” new fields in response
 
 **Response when `status: 'scored'`:**
 ```json
@@ -138,7 +138,7 @@ POST /api/v1/assessments/65f.../submit
 }
 ```
 
-**Response when `status: 'failed'`** (NEW field — previously this state had no diagnostic info):
+**Response when `status: 'failed'`** (NEW field â€” previously this state had no diagnostic info):
 ```json
 {
   "success": true,
@@ -155,7 +155,7 @@ POST /api/v1/assessments/65f.../submit
 
 ---
 
-### `POST /assessments/:id/retry-scoring` — NEW endpoint
+### `POST /assessments/:id/retry-scoring` â€” NEW endpoint
 
 Re-queues AI scoring for an assessment in `failed` status. Student-only, owner-only.
 
@@ -166,7 +166,7 @@ Authorization: Bearer <accessToken>
 (no body)
 ```
 
-**Response — 202 Accepted:**
+**Response â€” 202 Accepted:**
 ```json
 {
   "success": true,
@@ -184,10 +184,11 @@ Authorization: Bearer <accessToken>
 
 ---
 
-## 3. Reports Contract — No Changes Required
+## 3. Reports Contract â€” No Changes Required
 
-`report.careerRecommendations[]` now receives correctly-shaped data from `mapToRecommendations()`. The `Report` model schema (`CareerRecSchema` in `report.model.js`) is **unchanged** — every field the AI integration now populates (`careerSlug`, `careerTitle`, `category`, `matchScore`, `matchLabel`, `description`, `dimensionWeights`, `salaryRange`, `keySkills`, `growthOutlook`) already existed in the schema; they were simply never populated correctly before this fix.
+`report.careerRecommendations[]` now receives correctly-shaped data from `mapToRecommendations()`. The `Report` model schema (`CareerRecSchema` in `report.model.js`) is **unchanged** â€” every field the AI integration now populates (`careerSlug`, `careerTitle`, `category`, `matchScore`, `matchLabel`, `description`, `dimensionWeights`, `salaryRange`, `keySkills`, `growthOutlook`) already existed in the schema; they were simply never populated correctly before this fix.
 
-`pdf.service.js`'s `buildReportData()` (built in the prior session) already consumes these fields — verified end-to-end in this session: 29 responses → AI → `careerRecommendations[]` → 6-page PDF, 17.8KB, valid SHA-256 hash.
+`pdf.service.js`'s `buildReportData()` (built in the prior session) already consumes these fields â€” verified end-to-end in this session: 29 responses â†’ AI â†’ `careerRecommendations[]` â†’ 6-page PDF, 17.8KB, valid SHA-256 hash.
 
-`blockchain.service.js` anchors `report.pdf.sha256Hash` — also unchanged, and now receives a hash computed from a PDF containing real career data instead of empty/failed report data.
+`blockchain.service.js` anchors `report.pdf.sha256Hash` â€” also unchanged, and now receives a hash computed from a PDF containing real career data instead of empty/failed report data.
+
