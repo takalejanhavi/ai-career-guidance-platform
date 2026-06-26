@@ -21,11 +21,8 @@ const envSchema = z.object({
   AI_SERVICE_URL: z.string().url().optional(),
   AI_SERVICE_SECRET: z.string().min(8),
 
-  SMTP_HOST: z.string().optional(),
-  SMTP_PORT: z.coerce.number().default(465),
-  SMTP_USER: z.string().optional(),
-  SMTP_PASS: z.string().optional(),
-  EMAIL_FROM: z.string().optional(),
+  RESEND_API_KEY: z.string().min(1),
+  EMAIL_FROM: z.string().default('Career Guidance <onboarding@resend.dev>'),
 
   S3_ENDPOINT: z.string().url().optional(),
   S3_BUCKET: z.string().optional(),
