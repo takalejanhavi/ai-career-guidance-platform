@@ -124,7 +124,19 @@ function GrantPermissionForm({ reportId, onSuccess }) {
   const grantMut = useMutation({
     mutationFn: (data) => permissionApi.grant(reportId, data),
     onSuccess:  () => { toast.success('Report shared successfully'); onSuccess(); },
-    onError:    (err) => toast.error(err.response?.data?.message || 'Failed to share'),
+    onError: (err) => {
+      const data = err.response?.data;
+      // The error handler puts Zod field errors in data.errors (array).
+      // For specific business errors (EMAIL_NOT_VERIFIED, NOT_FOUND etc.)
+      // data.message already contains the right human-readable text.
+      if (data?.errors?.length) {
+        const first = data.errors[0];
+        const msg = first.field ? `${first.field}: ${first.message}` : first.message;
+        toast.error(msg);
+      } else {
+        toast.error(data?.message || 'Failed to share report');
+      }
+    },
   });
 
   const togglePerm = (cap) => {
