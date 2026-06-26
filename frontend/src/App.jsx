@@ -6,9 +6,10 @@ import AppLayout      from '@/components/layout/AppLayout';
 import AuthLayout     from '@/components/layout/AuthLayout';
 
 // Auth pages
-import LandingPage    from '@/pages/LandingPage';
-import LoginPage      from '@/pages/auth/LoginPage';
-import RegisterPage   from '@/pages/auth/RegisterPage';
+import LandingPage      from '@/pages/LandingPage';
+import LoginPage        from '@/pages/auth/LoginPage';
+import RegisterPage     from '@/pages/auth/RegisterPage';
+import VerifyEmailPage  from '@/pages/auth/VerifyEmailPage';
 
 // Student pages
 import StudentDashboard    from '@/pages/student/StudentDashboard';
@@ -54,8 +55,9 @@ export default function App() {
       <Routes>
         {/* Public */}
         <Route path="/" element={<LandingPage />} />
-        <Route path="/login"    element={<PublicRoute><AuthLayout><LoginPage /></AuthLayout></PublicRoute>} />
-        <Route path="/register" element={<PublicRoute><AuthLayout><RegisterPage /></AuthLayout></PublicRoute>} />
+        <Route path="/login"         element={<PublicRoute><AuthLayout><LoginPage /></AuthLayout></PublicRoute>} />
+        <Route path="/register"      element={<PublicRoute><AuthLayout><RegisterPage /></AuthLayout></PublicRoute>} />
+        <Route path="/verify-email"  element={<AuthLayout><VerifyEmailPage /></AuthLayout>} />
 
         {/* Dashboard redirect */}
         <Route path="/dashboard" element={<PrivateRoute><DashboardRedirect /></PrivateRoute>} />
