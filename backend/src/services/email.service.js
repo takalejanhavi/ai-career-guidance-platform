@@ -1,107 +1,50 @@
 'use strict';
 
-const nodemailer = require('nodemailer');
-const env = require('../config/env');
+const axios  = require('axios');
+const env    = require('../config/env');
 const logger = require('../config/logger');
 
-// ─────────────────────────────────────────────────────────────────────────────
-// SMTP Transport
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Transport ────────────────────────────────────────────────────────────────
 
-logger.info('[SMTP] Initializing transporter...');
-
-const transporter = nodemailer.createTransport({
-  host: env.SMTP_HOST,
-  port: Number(env.SMTP_PORT),
-  secure: Number(env.SMTP_PORT) === 465,
-  requireTLS: Number(env.SMTP_PORT) !== 465,
-
-  auth: {
-    user: env.SMTP_USER,
-    pass: env.SMTP_PASS,
-  },
-
-  connectionTimeout: 10000,
-  greetingTimeout: 10000,
-  socketTimeout: 15000,
-
-  tls: {
-    rejectUnauthorized: false,
-  },
-});
-
-logger.info('[SMTP] Configuration loaded', {
-  host: env.SMTP_HOST,
-  port: env.SMTP_PORT,
-  user: env.SMTP_USER,
-  from: env.EMAIL_FROM,
-});
-
-// Verify SMTP connection on startup
-(async () => {
-  try {
-    logger.info('[SMTP] Verifying SMTP connection...');
-    await transporter.verify();
-    logger.info('[SMTP] ✅ SMTP connection verified successfully');
-  } catch (err) {
-    logger.error('[SMTP] ❌ SMTP verification failed', {
-      message: err.message,
-      code: err.code,
-      command: err.command,
-      response: err.response,
-      responseCode: err.responseCode,
-      stack: err.stack,
-    });
-  }
-})();
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Send helper
-// ─────────────────────────────────────────────────────────────────────────────
+const BREVO_URL = 'https://api.brevo.com/v3/smtp/email';
 
 async function send({ to, subject, html, text }) {
+  logger.info('[EMAIL] Sending email', { to, subject });
+
+  const payload = {
+    sender: {
+      name:  'Career Guidance',
+      email: env.EMAIL_FROM_ADDRESS,
+    },
+    to:          [{ email: to }],
+    subject,
+    htmlContent: html,
+    textContent: text,
+  };
+
   try {
-    logger.info('[SMTP] Sending email...', {
-      to,
-      subject,
+    const { data } = await axios.post(BREVO_URL, payload, {
+      headers: {
+        'api-key':      env.BREVO_API_KEY,
+        'Content-Type': 'application/json',
+        Accept:         'application/json',
+      },
     });
 
-    const info = await transporter.sendMail({
-      from: env.EMAIL_FROM,
-      to,
-      subject,
-      html,
-      text,
-    });
-
-    logger.info('[SMTP] ✅ Email sent successfully', {
-      to,
-      subject,
-      messageId: info.messageId,
-      accepted: info.accepted,
-      rejected: info.rejected,
-    });
-
-    return info;
+    logger.info('[EMAIL] Email sent', { messageId: data.messageId, to });
+    return data;
   } catch (err) {
-    logger.error('[SMTP] ❌ Email send failed', {
+    logger.error('[EMAIL] Email send failed', {
+      status:   err.response?.status,
+      response: err.response?.data,
+      error:    err.message,
       to,
-      subject,
-      message: err.message,
-      code: err.code,
-      command: err.command,
-      response: err.response,
-      responseCode: err.responseCode,
-      stack: err.stack,
     });
-
     throw err;
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Email Templates
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Templates ────────────────────────────────────────────────────────────────
 
 const BASE = (content) => `
 <!DOCTYPE html>
@@ -185,13 +128,7 @@ async function sendPasswordChangedEmail({ email, firstName }) {
   });
 }
 
-async function sendReportSharedEmail({
-  granteeEmail,
-  granteeName,
-  ownerName,
-  reportId,
-  permissions,
-}) {
+async function sendReportSharedEmail({ granteeEmail, granteeName, ownerName, reportId, permissions }) {
   const url = `${env.FRONTEND_URL}/reports/${reportId}`;
 
   return send({
