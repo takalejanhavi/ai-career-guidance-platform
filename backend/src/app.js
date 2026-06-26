@@ -27,7 +27,8 @@ const notificationRoutes    = require('./modules/notifications/notification.rout
 const psychologistRoutes    = require('./modules/psychologist/psychologist.routes');
 
 const app = express();
-
+// Render is behind a reverse proxy
+app.set('trust proxy', 1);
 // ─── Security headers ─────────────────────────────────────────────────────────
 app.use(helmet({
   contentSecurityPolicy: {
